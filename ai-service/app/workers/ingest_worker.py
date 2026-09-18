@@ -100,27 +100,18 @@ def process_material(material_id: str, project_id: str, file_path: str, job_id: 
             sample_chunks.append(chunks[i]["text"])
         sample = "\n\n".join(sample_chunks)[:5000]
 
-        concepts = []
-        try:
-            resp = llm.generate(concept_prompt(sample), feature="concept_extract", schema=True)
-            parsed = parse_json(resp.text)
-            if parsed.get("concepts") and isinstance(parsed["concepts"], list):
-                concepts = [c for c in parsed["concepts"] if c.get("name")]
-        except Exception as ex:
-            log.info("concept extract failed, using text analysis fallback: %s", ex)
-
-        if not concepts:
-            # Fallback concept extraction from most frequent significant terms
-            all_words = re.findall(r"\b[A-Z][a-zA-Z]{3,}\b", sample)
-            counts = {}
-            for w in all_words:
-                if w.lower() not in {"this", "that", "from", "with", "page", "chunk", "figure", "table"}:
-                    counts[w] = counts.get(w, 0) + 1
-            sorted_terms = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:5]
-            if sorted_terms:
-                concepts = [{"name": term, "description": f"Key concept '{term}' covered in {file_name}"} for term, _ in sorted_terms]
-            else:
-                concepts = [{"name": "Core Principles", "description": f"Main principles and findings from {file_name}"}]
+        # Fast local concept extraction (0 external API calls, 0 latency, 0 rate limits)
+        all_words = re.findall(r"\b[A-Z][a-zA-Z]{3,}\b", sample)
+        counts = {}
+        stop_words = {"this", "that", "from", "with", "page", "chunk", "figure", "table", "section", "chapter", "document", "university", "introduction", "conclusion", "abstract", "summary"}
+        for w in all_words:
+            if w.lower() not in stop_words:
+                counts[w] = counts.get(w, 0) + 1
+        sorted_terms = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:6]
+        if sorted_terms:
+            concepts = [{"name": term, "description": f"Key concept '{term}' from {file_name}"} for term, _ in sorted_terms]
+        else:
+            concepts = [{"name": "Core Principles", "description": f"Main principles and findings from {file_name}"}]
 
         now = datetime.now(timezone.utc)
         col_concepts = db()["concepts"]

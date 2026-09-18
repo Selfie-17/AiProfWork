@@ -718,20 +718,20 @@ def embed_text(text: str, model_preference: str = "auto") -> list[float]:
             cache_service.set_embedding(clean, vec)
             return vec
 
-    # 3. If BAAI wasn't tried yet, try BAAI
+    # 3. If BAAI wasn't tried yet, try BAAI (local ONNX, 0 API calls)
     vec = embed_bge(clean)
     if vec:
         cache_service.set_embedding(clean, vec)
         return vec
 
-    # 4. Try Gemini if API key is present
-    if settings.gemini_api_key:
+    # 4. Only try Gemini if explicitly configured/preferred
+    if model_preference == "gemini" and settings.gemini_api_key:
         vec = embed_gemini(clean)
         if vec:
             cache_service.set_embedding(clean, vec)
             return vec
 
-    # 5. Deterministic n-gram hash vector fallback
+    # 5. Deterministic local n-gram hash vector fallback (0 API calls, 384 dimensions)
     dim = settings.embedding_dim or 384
     vec = [0.0] * dim
     tokens = re.findall(r"\b[a-z0-9]{2,}\b", clean.lower())
