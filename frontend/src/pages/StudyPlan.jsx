@@ -10,7 +10,11 @@ import {
   BookOpen, 
   ArrowRight,
   ListTodo,
-  TrendingUp
+  TrendingUp,
+  Plus,
+  Trash2,
+  Edit2,
+  RotateCcw
 } from "lucide-react";
 import api from "../api";
 import ProjectTabs from "../components/ProjectTabs";
@@ -57,6 +61,72 @@ export default function StudyPlan() {
     }
   };
 
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingNum, setEditingNum] = useState(null);
+  const [msForm, setMsForm] = useState({ title: "", description: "", targetDays: 3, actionItems: "" });
+
+  const handleAddMilestone = async (e) => {
+    e.preventDefault();
+    if (!msForm.title.trim()) return;
+    try {
+      const items = msForm.actionItems ? msForm.actionItems.split("\n").map(s => s.trim()).filter(Boolean) : [];
+      const res = await api.post(`/api/projects/${id}/study-plan/milestones`, {
+        title: msForm.title.trim(),
+        description: msForm.description.trim(),
+        targetDays: Number(msForm.targetDays) || 3,
+        actionItems: items
+      });
+      setPlan(res.data.data);
+      setIsAddOpen(false);
+      setMsForm({ title: "", description: "", targetDays: 3, actionItems: "" });
+      toast.push("Milestone added to roadmap!", "success");
+    } catch (err) {
+      toast.push(err.response?.data?.message || "Failed to add milestone", "error");
+    }
+  };
+
+  const handleEditMilestone = async (e) => {
+    e.preventDefault();
+    if (!editingNum) return;
+    try {
+      const items = msForm.actionItems ? msForm.actionItems.split("\n").map(s => s.trim()).filter(Boolean) : [];
+      const res = await api.put(`/api/projects/${id}/study-plan/milestones/${editingNum}`, {
+        title: msForm.title.trim(),
+        description: msForm.description.trim(),
+        targetDays: Number(msForm.targetDays) || 3,
+        actionItems: items
+      });
+      setPlan(res.data.data);
+      setIsEditOpen(false);
+      toast.push("Milestone updated!", "success");
+    } catch (err) {
+      toast.push(err.response?.data?.message || "Failed to update milestone", "error");
+    }
+  };
+
+  const handleDeleteMilestone = async (num) => {
+    if (!window.confirm(`Delete Milestone #${num}?`)) return;
+    try {
+      const res = await api.delete(`/api/projects/${id}/study-plan/milestones/${num}`);
+      setPlan(res.data.data);
+      toast.push(`Milestone #${num} removed`, "info");
+    } catch (err) {
+      toast.push(err.response?.data?.message || "Failed to delete milestone", "error");
+    }
+  };
+
+  const handleResetPlan = async () => {
+    if (!window.confirm("Are you sure you want to reset this study roadmap? This will delete all milestones.")) return;
+    try {
+      await api.delete(`/api/projects/${id}/study-plan`);
+      setPlan(null);
+      toast.push("Study plan reset successfully", "info");
+    } catch (err) {
+      toast.push(err.response?.data?.message || "Failed to reset plan", "error");
+    }
+  };
+
   const milestones = plan?.milestones || [];
   const completed = plan?.completedMilestones || [];
   const progressPct = milestones.length > 0 ? Math.round((completed.length / milestones.length) * 100) : 0;
@@ -83,14 +153,37 @@ export default function StudyPlan() {
           </p>
         </div>
 
-        <button
-          onClick={generatePlan}
-          disabled={generating}
-          className="inline-flex items-center space-x-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-sm transition self-start sm:self-auto"
-        >
-          <Sparkles className={`w-4 h-4 ${generating ? "animate-spin" : ""}`} />
-          <span>{generating ? "Calibrating Roadmap…" : (plan ? "Re-generate Roadmap" : "Generate Study Plan")}</span>
-        </button>
+        <div className="flex items-center space-x-2 self-start sm:self-auto">
+          <button
+            onClick={() => {
+              setMsForm({ title: "", description: "", targetDays: 3, actionItems: "" });
+              setIsAddOpen(true);
+            }}
+            className="inline-flex items-center space-x-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold px-3.5 py-2.5 rounded-xl shadow-xs transition"
+          >
+            <Plus className="w-3.5 h-3.5 text-brand-600" />
+            <span>Add Milestone</span>
+          </button>
+
+          {plan && (
+            <button
+              onClick={handleResetPlan}
+              className="inline-flex items-center space-x-1.5 bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 hover:border-rose-200 text-xs font-semibold px-3 py-2.5 rounded-xl shadow-xs transition"
+              title="Reset study plan"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          <button
+            onClick={generatePlan}
+            disabled={generating}
+            className="inline-flex items-center space-x-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-sm transition"
+          >
+            <Sparkles className={`w-4 h-4 ${generating ? "animate-spin" : ""}`} />
+            <span>{generating ? "Calibrating Roadmap…" : (plan ? "Re-generate" : "Generate Study Plan")}</span>
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -191,16 +284,43 @@ export default function StudyPlan() {
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => toggleMilestone(num)}
-                        className={`text-xs font-semibold px-3 py-1.5 rounded-xl border transition ${
-                          isDone
-                            ? "bg-emerald-100 text-emerald-800 border-emerald-200"
-                            : "bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200"
-                        }`}
-                      >
-                        {isDone ? "Completed ✓" : "Mark Done"}
-                      </button>
+                      <div className="flex items-center space-x-1.5 shrink-0">
+                        <button
+                          onClick={() => toggleMilestone(num)}
+                          className={`text-xs font-semibold px-3 py-1.5 rounded-xl border transition ${
+                            isDone
+                              ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                              : "bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200"
+                          }`}
+                        >
+                          {isDone ? "Completed ✓" : "Mark Done"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingNum(num);
+                            setMsForm({
+                              title: m.title || "",
+                              description: m.description || "",
+                              targetDays: m.targetDays || 3,
+                              actionItems: (m.actionableTasks || []).join("\n")
+                            });
+                            setIsEditOpen(true);
+                          }}
+                          title="Edit milestone"
+                          className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMilestone(num)}
+                          title="Delete milestone"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     {/* Action Items */}
@@ -221,6 +341,96 @@ export default function StudyPlan() {
                 );
               })}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit Milestone Modal */}
+      {(isAddOpen || isEditOpen) && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-base text-slate-900">
+                {isAddOpen ? "Add Study Milestone" : `Edit Milestone #${editingNum}`}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddOpen(false);
+                  setIsEditOpen(false);
+                }}
+                className="text-slate-400 hover:text-slate-600 text-sm font-semibold p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={isAddOpen ? handleAddMilestone : handleEditMilestone} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Milestone Title *</label>
+                <input
+                  type="text"
+                  required
+                  value={msForm.title}
+                  onChange={(e) => setMsForm({ ...msForm, title: e.target.value })}
+                  placeholder="e.g. Master Gradient Descent & Backpropagation"
+                  className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Description / Target Outcome</label>
+                <textarea
+                  rows={3}
+                  value={msForm.description}
+                  onChange={(e) => setMsForm({ ...msForm, description: e.target.value })}
+                  placeholder="Understand loss function formulation, compute partial derivatives, and implement optimization loop."
+                  className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Target Days</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={msForm.targetDays}
+                  onChange={(e) => setMsForm({ ...msForm, targetDays: e.target.value })}
+                  className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Action Tasks (one per line)</label>
+                <textarea
+                  rows={3}
+                  value={msForm.actionItems}
+                  onChange={(e) => setMsForm({ ...msForm, actionItems: e.target.value })}
+                  placeholder={"Read Lecture 4 slides\nDerive chain rule equations\nPass 5-question checkpoint quiz"}
+                  className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-hidden focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 font-mono"
+                />
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAddOpen(false);
+                    setIsEditOpen(false);
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 text-xs font-bold text-white bg-brand-600 hover:bg-brand-700 rounded-xl shadow-xs transition"
+                >
+                  {isAddOpen ? "Add Milestone" : "Save Changes"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

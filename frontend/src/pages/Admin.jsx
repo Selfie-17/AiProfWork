@@ -46,7 +46,9 @@ import {
   ToggleRight,
   Wifi,
   WifiOff,
-  Settings2
+  Settings2,
+  Edit2,
+  Trash2
 } from "lucide-react";
 import api from "../api";
 import { useToast } from "../components/Toast";
@@ -95,6 +97,75 @@ export default function Admin() {
   const [loadingModels, setLoadingModels] = useState({});
 
   const toast = useToast();
+
+  // User & Entity CRUD Management State
+  const [editingUser, setEditingUser] = useState(null);
+  const [savingUser, setSavingUser] = useState(false);
+
+  const handleUpdateUser = async (e) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    setSavingUser(true);
+    try {
+      const res = await api.put(`/api/admin/users/${editingUser.id}`, {
+        name: editingUser.name,
+        email: editingUser.email,
+        role: editingUser.role
+      });
+      toast.push("User updated successfully", "success");
+      setUsers((prev) => prev.map((u) => u.id === editingUser.id ? { ...u, ...res.data?.data } : u));
+      if (selectedUserDetail?.user?.id === editingUser.id) {
+        setSelectedUserDetail((prev) => ({
+          ...prev,
+          user: { ...prev.user, ...res.data?.data }
+        }));
+      }
+      setEditingUser(null);
+    } catch (err) {
+      toast.push("Failed to update user: " + (err.response?.data?.message || err.message), "error");
+    } finally {
+      setSavingUser(false);
+    }
+  };
+
+  const handleDeleteUser = async (user) => {
+    if (!window.confirm(`Are you sure you want to permanently delete user "${user.name}" (${user.email})? This cascades to all their spaces and projects.`)) {
+      return;
+    }
+    try {
+      await api.delete(`/api/admin/users/${user.id}`);
+      toast.push("User deleted successfully", "success");
+      setUsers((prev) => prev.filter((u) => u.id !== user.id));
+      if (selectedUserDetail?.user?.id === user.id) {
+        setSelectedUserDetail(null);
+      }
+    } catch (err) {
+      toast.push("Failed to delete user: " + (err.response?.data?.message || err.message), "error");
+    }
+  };
+
+  const handleDeleteSpace = async (space) => {
+    if (!window.confirm(`Delete Space "${space.name}" and all isolated projects inside it?`)) return;
+    try {
+      await api.delete(`/api/admin/spaces/${space.id}`);
+      toast.push("Space deleted", "success");
+      setSpaces((prev) => prev.filter((s) => s.id !== space.id));
+      setProjects((prev) => prev.filter((p) => p.spaceId !== space.id));
+    } catch (err) {
+      toast.push("Failed to delete space: " + (err.response?.data?.message || err.message), "error");
+    }
+  };
+
+  const handleDeleteProject = async (project) => {
+    if (!window.confirm(`Delete project "${project.name}"?`)) return;
+    try {
+      await api.delete(`/api/admin/projects/${project.id}`);
+      toast.push("Project deleted", "success");
+      setProjects((prev) => prev.filter((p) => p.id !== project.id));
+    } catch (err) {
+      toast.push("Failed to delete project: " + (err.response?.data?.message || err.message), "error");
+    }
+  };
 
   const testRetrieval = async (queryText, modelChoice) => {
     const q = (queryText !== undefined ? queryText : sampleQuery).trim();
@@ -877,13 +948,29 @@ export default function Admin() {
                               {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "Recent"}
                             </td>
                             <td className="px-5 py-3.5 text-right">
-                              <button
-                                onClick={() => openUserDetail(u)}
-                                className="inline-flex items-center space-x-1 text-xs font-semibold text-brand-600 hover:text-brand-800 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg border border-brand-200/60 transition"
-                              >
-                                <span>Inspect Journey</span>
-                                <ArrowRight className="w-3.5 h-3.5" />
-                              </button>
+                              <div className="inline-flex items-center justify-end space-x-1.5">
+                                <button
+                                  onClick={() => setEditingUser({ id: u.id, name: u.name, email: u.email, role: u.role || "USER" })}
+                                  className="p-1.5 text-slate-500 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition"
+                                  title="Edit User"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteUser(u)}
+                                  className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                                  title="Delete User"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => openUserDetail(u)}
+                                  className="inline-flex items-center space-x-1 text-xs font-semibold text-brand-600 hover:text-brand-800 bg-brand-50 hover:bg-brand-100 px-2.5 py-1.5 rounded-lg border border-brand-200/60 transition"
+                                >
+                                  <span>Inspect</span>
+                                  <ArrowRight className="w-3 h-3" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))
@@ -968,6 +1055,81 @@ export default function Admin() {
                   </div>
                 </div>
               )}
+
+              {/* Edit User Modal */}
+              {editingUser && (
+                <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+                  <div className="bg-white rounded-3xl border border-slate-200 p-6 w-full max-w-md space-y-4 shadow-modal animate-in fade-in zoom-in-95 duration-200">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                      <div className="flex items-center space-x-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center font-bold">
+                          <Edit2 className="w-4 h-4" />
+                        </div>
+                        <h3 className="font-bold text-base text-slate-900">Edit Learner Profile</h3>
+                      </div>
+                      <button
+                        onClick={() => setEditingUser(null)}
+                        className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleUpdateUser} className="space-y-3.5">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Full Name</label>
+                        <input
+                          type="text"
+                          required
+                          value={editingUser.name || ""}
+                          onChange={(e) => setEditingUser({ ...editingUser, name: e.target.value })}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-brand-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Email Address</label>
+                        <input
+                          type="email"
+                          required
+                          value={editingUser.email || ""}
+                          onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-brand-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Role / Permissions</label>
+                        <select
+                          value={editingUser.role || "USER"}
+                          onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value })}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 font-semibold focus:bg-white focus:outline-none focus:border-brand-500"
+                        >
+                          <option value="USER">USER (Student / Standard Learner)</option>
+                          <option value="ADMIN">ADMIN (System Administrator)</option>
+                        </select>
+                      </div>
+
+                      <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setEditingUser(null)}
+                          className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={savingUser}
+                          className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl transition disabled:opacity-50 flex items-center space-x-1.5"
+                        >
+                          {savingUser ? <span>Saving…</span> : <span>Save Changes</span>}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1032,6 +1194,16 @@ export default function Admin() {
                                 <span>Open Space</span>
                                 <ExternalLink className="w-3 h-3" />
                               </Link>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteSpace(s);
+                                }}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                                title="Delete Space"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                             </div>
                           </div>
 
@@ -1050,7 +1222,7 @@ export default function Admin() {
                                       </div>
                                     </div>
 
-                                    <div className="flex items-center space-x-4">
+                                    <div className="flex items-center space-x-3">
                                       <span className="text-[11px] text-slate-400">Owner: {p.ownerName || "Student"}</span>
                                       <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
                                         {p.status || "ACTIVE"}
@@ -1062,6 +1234,13 @@ export default function Admin() {
                                         <span>Inspect Learning Workspace</span>
                                         <ArrowRight className="w-3 h-3" />
                                       </Link>
+                                      <button
+                                        onClick={() => handleDeleteProject(p)}
+                                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition"
+                                        title="Delete Project"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
                                     </div>
                                   </div>
                                 ))

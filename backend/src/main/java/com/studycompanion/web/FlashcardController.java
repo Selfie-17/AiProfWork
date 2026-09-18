@@ -149,6 +149,75 @@ public class FlashcardController {
         return ApiResponse.ok(fc);
     }
 
+    @PostMapping("/api/projects/{projectId}/flashcards")
+    public ApiResponse<Flashcard> createFlashcard(
+            @PathVariable String projectId,
+            @RequestBody Map<String, String> body,
+            @AuthenticationPrincipal UserPrincipal user) {
+        accessGuard.requireProject(projectId);
+        String front = body.get("front");
+        String back = body.get("back");
+        String concept = body.getOrDefault("conceptName", "General");
+        if (front == null || front.isBlank()) throw ApiException.badRequest("Front prompt required");
+        if (back == null || back.isBlank()) throw ApiException.badRequest("Back answer required");
+
+        Flashcard fc = new Flashcard();
+        fc.setProjectId(projectId);
+        fc.setUserId(user.getId());
+        fc.setConceptName(concept.trim());
+        fc.setFront(front.trim());
+        fc.setBack(back.trim());
+        fc.setInterval(1);
+        fc.setRepetitions(0);
+        fc.setEaseFactor(2.5);
+        fc.setNextReviewDate(Instant.now());
+        fc.setCreatedAt(Instant.now());
+        fc = flashcardRepository.save(fc);
+
+        activityService.record(user.getId(), projectId, "FLASHCARD_CREATED",
+                Map.of("cardId", fc.getId(), "concept", fc.getConceptName()), "fc-create:" + fc.getId());
+        return ApiResponse.ok(fc);
+    }
+
+    @PutMapping("/api/projects/{projectId}/flashcards/{id}")
+    public ApiResponse<Flashcard> updateFlashcard(
+            @PathVariable String projectId,
+            @PathVariable String id,
+            @RequestBody Map<String, String> body,
+            @AuthenticationPrincipal UserPrincipal user) {
+        accessGuard.requireProject(projectId);
+        Flashcard fc = flashcardRepository.findById(id).orElseThrow(() -> ApiException.notFound("Flashcard not found"));
+        if (!fc.getProjectId().equals(projectId) || !fc.getUserId().equals(user.getId())) {
+            throw ApiException.forbidden("Cannot modify this flashcard");
+        }
+        if (body.containsKey("front") && body.get("front") != null && !body.get("front").isBlank()) {
+            fc.setFront(body.get("front").trim());
+        }
+        if (body.containsKey("back") && body.get("back") != null && !body.get("back").isBlank()) {
+            fc.setBack(body.get("back").trim());
+        }
+        if (body.containsKey("conceptName") && body.get("conceptName") != null && !body.get("conceptName").isBlank()) {
+            fc.setConceptName(body.get("conceptName").trim());
+        }
+        return ApiResponse.ok(flashcardRepository.save(fc));
+    }
+
+    @DeleteMapping("/api/projects/{projectId}/flashcards/{id}")
+    public ApiResponse<Void> deleteFlashcard(
+            @PathVariable String projectId,
+            @PathVariable String id,
+            @AuthenticationPrincipal UserPrincipal user) {
+        accessGuard.requireProject(projectId);
+        Flashcard fc = flashcardRepository.findById(id).orElseThrow(() -> ApiException.notFound("Flashcard not found"));
+        if (!fc.getProjectId().equals(projectId) || !fc.getUserId().equals(user.getId())) {
+            throw ApiException.forbidden("Cannot delete this flashcard");
+        }
+        flashcardRepository.delete(fc);
+        activityService.record(user.getId(), projectId, "FLASHCARD_DELETED",
+                Map.of("cardId", id), "fc-del:" + id);
+        return ApiResponse.ok(null);
+    }
+
     public static class ReviewReq {
         @Min(0) @Max(5)
         public int quality = 3;

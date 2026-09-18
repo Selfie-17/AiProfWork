@@ -8,7 +8,8 @@ import {
   HelpCircle, 
   ShieldAlert,
   BrainCircuit,
-  FileQuestion
+  FileQuestion,
+  Trash2
 } from "lucide-react";
 import api from "../api";
 import ProjectTabs from "../components/ProjectTabs";
@@ -33,6 +34,30 @@ export default function Mistakes() {
   useEffect(() => {
     loadMistakes();
   }, [id]);
+
+  const handleDeleteMistake = async (mistakeId) => {
+    try {
+      await api.delete(`/api/mistakes/${mistakeId}`);
+      toast.push("Mistake dismissed from tracker", "success");
+      setData((prev) => ({
+        ...prev,
+        mistakes: prev.mistakes.filter((m) => m.id !== mistakeId)
+      }));
+    } catch (err) {
+      toast.push("Failed to dismiss mistake", "error");
+    }
+  };
+
+  const handleClearAllMistakes = async () => {
+    if (!window.confirm("Are you sure you want to clear all recorded mistakes for this project?")) return;
+    try {
+      await api.delete(`/api/projects/${id}/mistakes`);
+      toast.push("All recorded mistakes cleared", "success");
+      setData((prev) => ({ ...prev, mistakes: [] }));
+    } catch (err) {
+      toast.push("Failed to clear mistakes", "error");
+    }
+  };
 
   const runAnalysis = async () => {
     setAnalyzing(true);
@@ -73,14 +98,27 @@ export default function Mistakes() {
           </p>
         </div>
 
-        <button
-          onClick={runAnalysis}
-          disabled={analyzing || mistakes.length === 0}
-          className="inline-flex items-center space-x-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-sm transition self-start sm:self-auto"
-        >
-          <Sparkles className={`w-4 h-4 ${analyzing ? "animate-spin" : ""}`} />
-          <span>{analyzing ? "Diagnosing Patterns…" : "Analyze Misconceptions"}</span>
-        </button>
+        <div className="flex items-center space-x-2.5 self-start sm:self-auto">
+          {mistakes.length > 0 && (
+            <button
+              onClick={handleClearAllMistakes}
+              className="inline-flex items-center space-x-1.5 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 text-xs font-semibold px-3 py-2.5 rounded-xl border border-slate-200 hover:border-rose-200 transition"
+              title="Clear all recorded mistakes"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Clear History</span>
+            </button>
+          )}
+
+          <button
+            onClick={runAnalysis}
+            disabled={analyzing || mistakes.length === 0}
+            className="inline-flex items-center space-x-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-sm transition"
+          >
+            <Sparkles className={`w-4 h-4 ${analyzing ? "animate-spin" : ""}`} />
+            <span>{analyzing ? "Diagnosing Patterns…" : "Analyze Misconceptions"}</span>
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -153,9 +191,18 @@ export default function Mistakes() {
                     <span className="font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
                       {m.conceptName || "General Concept"}
                     </span>
-                    <span className="text-slate-400 text-[11px]">
-                      {m.createdAt ? new Date(m.createdAt).toLocaleDateString() : "Recent"}
-                    </span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-slate-400 text-[11px]">
+                        {m.createdAt ? new Date(m.createdAt).toLocaleDateString() : "Recent"}
+                      </span>
+                      <button
+                        onClick={() => handleDeleteMistake(m.id)}
+                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition"
+                        title="Dismiss Mistake"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
 
                   <p className="text-xs font-semibold text-slate-900 leading-relaxed">

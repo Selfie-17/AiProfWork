@@ -82,6 +82,53 @@ public class AdminController {
         return ApiResponse.ok(quotaService.getQuotaSummary(id));
     }
 
+    @PutMapping("/users/{id}")
+    public ApiResponse<Map<String, Object>> updateUser(
+            @PathVariable String id,
+            @RequestBody Map<String, String> body) {
+        User user = userRepository.findById(id).orElseThrow();
+        if (body.containsKey("name") && body.get("name") != null && !body.get("name").isBlank()) {
+            user.setName(body.get("name").trim());
+        }
+        if (body.containsKey("email") && body.get("email") != null && !body.get("email").isBlank()) {
+            user.setEmail(body.get("email").trim().toLowerCase());
+        }
+        if (body.containsKey("role") && body.get("role") != null && !body.get("role").isBlank()) {
+            String r = body.get("role").trim().toUpperCase();
+            if ("ADMIN".equals(r) || "USER".equals(r)) {
+                user.setRole(r);
+            }
+        }
+        user = userRepository.save(user);
+        return ApiResponse.ok(Map.of("id", user.getId(), "name", user.getName(), "email", user.getEmail(), "role", user.getRole()));
+    }
+
+    @DeleteMapping("/users/{id}")
+    public ApiResponse<Void> deleteUser(@PathVariable String id) {
+        User user = userRepository.findById(id).orElseThrow();
+        projectRepository.findByUserId(id).forEach(p -> {
+            conceptRepository.findByProjectId(p.getId()).forEach(conceptRepository::delete);
+            projectRepository.delete(p);
+        });
+        spaceRepository.findByUserIdOrderByCreatedAtDesc(id).forEach(spaceRepository::delete);
+        activityEventRepository.findByUserIdOrderByCreatedAtDesc(id).forEach(activityEventRepository::delete);
+        userRepository.delete(user);
+        return ApiResponse.ok(null);
+    }
+
+    @DeleteMapping("/projects/{id}")
+    public ApiResponse<Void> deleteProjectAdmin(@PathVariable String id) {
+        projectRepository.findById(id).ifPresent(projectRepository::delete);
+        return ApiResponse.ok(null);
+    }
+
+    @DeleteMapping("/spaces/{id}")
+    public ApiResponse<Void> deleteSpaceAdmin(@PathVariable String id) {
+        projectRepository.findBySpaceId(id).forEach(projectRepository::delete);
+        spaceRepository.findById(id).ifPresent(spaceRepository::delete);
+        return ApiResponse.ok(null);
+    }
+
     @GetMapping("/projects")
     public ApiResponse<List<Map<String, Object>>> projects() {
         Map<String, User> userMap = userRepository.findAll().stream()

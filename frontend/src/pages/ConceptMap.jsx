@@ -12,7 +12,11 @@ import {
   Layers,
   ZoomIn,
   ZoomOut,
-  Maximize2
+  Maximize2,
+  Plus,
+  Edit2,
+  Trash2,
+  X
 } from "lucide-react";
 import api from "../api";
 import ProjectTabs from "../components/ProjectTabs";
@@ -26,6 +30,85 @@ export default function ConceptMap() {
   const [regenerating, setRegenerating] = useState(false);
   const [zoom, setZoom] = useState(1);
   const toast = useToast();
+
+  // Concept CRUD State
+  const [conceptModalOpen, setConceptModalOpen] = useState(false);
+  const [editingConcept, setEditingConcept] = useState(null);
+  const [conceptForm, setConceptForm] = useState({
+    name: "",
+    description: "",
+    category: "Foundations & Math",
+    masteryScore: 40
+  });
+  const [savingConcept, setSavingConcept] = useState(false);
+
+  const openCreateConcept = () => {
+    setEditingConcept(null);
+    setConceptForm({
+      name: "",
+      description: "",
+      category: "Foundations & Math",
+      masteryScore: 40
+    });
+    setConceptModalOpen(true);
+  };
+
+  const openEditConcept = (node) => {
+    setEditingConcept(node);
+    setConceptForm({
+      name: node.label || node.name || "",
+      description: node.description || "",
+      category: node.category || "Foundations & Math",
+      masteryScore: Math.round(node.masteryScore ?? 40)
+    });
+    setConceptModalOpen(true);
+  };
+
+  const handleSaveConcept = async (e) => {
+    e.preventDefault();
+    if (!conceptForm.name.trim()) return;
+    setSavingConcept(true);
+    try {
+      if (editingConcept && editingConcept.id) {
+        await api.put(`/api/concepts/${editingConcept.id}`, {
+          name: conceptForm.name.trim(),
+          description: conceptForm.description.trim(),
+          category: conceptForm.category,
+          masteryScore: Number(conceptForm.masteryScore)
+        });
+        toast.push("Concept updated successfully", "success");
+      } else {
+        await api.post(`/api/projects/${id}/concepts`, {
+          name: conceptForm.name.trim(),
+          description: conceptForm.description.trim(),
+          category: conceptForm.category,
+          masteryScore: Number(conceptForm.masteryScore)
+        });
+        toast.push("New concept added to knowledge map", "success");
+      }
+      setConceptModalOpen(false);
+      loadGraph();
+    } catch (err) {
+      toast.push("Failed to save concept: " + (err.response?.data?.message || err.message), "error");
+    } finally {
+      setSavingConcept(false);
+    }
+  };
+
+  const handleDeleteConcept = async (node) => {
+    if (!node || !node.id) {
+      toast.push("Concept is synthetic; regenerate graph to refresh", "info");
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to delete concept "${node.label || node.name}"?`)) return;
+    try {
+      await api.delete(`/api/concepts/${node.id}`);
+      toast.push("Concept deleted", "success");
+      loadGraph();
+    } catch (err) {
+      toast.push("Failed to delete concept", "error");
+    }
+  };
 
   const loadGraph = (isRefresh = false) => {
     if (isRefresh) setRegenerating(true);
@@ -148,6 +231,14 @@ export default function ConceptMap() {
         </div>
 
         <div className="flex items-center space-x-2.5">
+          <button
+            onClick={openCreateConcept}
+            className="inline-flex items-center space-x-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold px-3.5 py-2.5 rounded-xl shadow-xs transition"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Concept</span>
+          </button>
+
           <button
             onClick={() => loadGraph(true)}
             disabled={regenerating}
@@ -404,17 +495,35 @@ export default function ConceptMap() {
           <div className="lg:col-span-4 space-y-4">
             {selectedNode ? (
               <div className="bg-white rounded-3xl border border-slate-200/90 shadow-card p-6 space-y-5">
-                <div>
-                  <div className="text-[11px] font-bold text-brand-600 uppercase tracking-wider mb-1 flex items-center space-x-1.5">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Concept Deep Dive</span>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] font-bold text-brand-600 uppercase tracking-wider mb-1 flex items-center space-x-1.5">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Concept Deep Dive</span>
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-900 leading-tight">
+                      {selectedNode.label || selectedNode.name}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Category: <span className="font-semibold text-slate-700">{selectedNode.category || "Core Knowledge"}</span> · Level {selectedNode.level || 1}
+                    </p>
                   </div>
-                  <h3 className="text-xl font-bold text-slate-900 leading-tight">
-                    {selectedNode.label || selectedNode.name}
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Category: <span className="font-semibold text-slate-700">{selectedNode.category || "Core Knowledge"}</span> · Level {selectedNode.level || 1}
-                  </p>
+                  <div className="flex items-center space-x-1 shrink-0">
+                    <button
+                      onClick={() => openEditConcept(selectedNode)}
+                      className="p-1.5 text-slate-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition"
+                      title="Edit Concept"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteConcept(selectedNode)}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                      title="Delete Concept"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Pedagogical Description */}
@@ -484,6 +593,101 @@ export default function ConceptMap() {
                 Click any concept in the diagram to inspect its pedagogical explanation and study actions.
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Concept Add / Edit Modal */}
+      {conceptModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 p-6 w-full max-w-md space-y-4 shadow-modal animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center font-bold">
+                  <Network className="w-4 h-4" />
+                </div>
+                <h3 className="font-bold text-base text-slate-900">
+                  {editingConcept ? "Edit Concept" : "Create New Concept"}
+                </h3>
+              </div>
+              <button
+                onClick={() => setConceptModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveConcept} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Concept Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Euclidean Distance Metric"
+                  value={conceptForm.name}
+                  onChange={(e) => setConceptForm({ ...conceptForm, name: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-brand-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Pedagogical Description</label>
+                <textarea
+                  rows={3}
+                  placeholder="Core intuition, mathematical formulas, or practical importance..."
+                  value={conceptForm.description}
+                  onChange={(e) => setConceptForm({ ...conceptForm, description: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:border-brand-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Category / Stage</label>
+                  <select
+                    value={conceptForm.category}
+                    onChange={(e) => setConceptForm({ ...conceptForm, category: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 font-medium focus:bg-white focus:outline-none focus:border-brand-500"
+                  >
+                    <option value="Foundations & Math">Foundations & Math</option>
+                    <option value="Core Algorithms">Core Algorithms</option>
+                    <option value="Evaluation & Tuning">Evaluation & Tuning</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Mastery ({conceptForm.masteryScore}%)
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={conceptForm.masteryScore}
+                    onChange={(e) => setConceptForm({ ...conceptForm, masteryScore: Number(e.target.value) })}
+                    className="w-full mt-2"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setConceptModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingConcept}
+                  className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl transition disabled:opacity-50 flex items-center space-x-1.5"
+                >
+                  {savingConcept ? <span>Saving…</span> : <span>{editingConcept ? "Save Changes" : "Create Concept"}</span>}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

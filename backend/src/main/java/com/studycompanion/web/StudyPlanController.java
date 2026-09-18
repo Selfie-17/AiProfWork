@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -118,5 +119,113 @@ public class StudyPlanController {
         plan = studyPlanRepository.save(plan);
 
         return ApiResponse.ok(plan);
+    }
+
+    @PostMapping("/api/projects/{projectId}/study-plan/milestones")
+    public ApiResponse<StudyPlan> addMilestone(
+            @PathVariable String projectId,
+            @RequestBody Map<String, Object> body,
+            @AuthenticationPrincipal UserPrincipal user) {
+        accessGuard.requireProject(projectId);
+        StudyPlan plan = studyPlanRepository.findByProjectIdAndUserId(projectId, user.getId())
+                .orElseGet(() -> {
+                    StudyPlan p = new StudyPlan();
+                    p.setProjectId(projectId);
+                    p.setUserId(user.getId());
+                    p.setTitle("Personalized Study Plan");
+                    p.setOverview("Custom milestones roadmap");
+                    p.setCreatedAt(Instant.now());
+                    return p;
+                });
+
+        List<Map<String, Object>> msList = new ArrayList<>(plan.getMilestones());
+        int nextNum = msList.isEmpty() ? 1 : msList.size() + 1;
+
+        Map<String, Object> newMs = new HashMap<>();
+        newMs.put("milestoneNumber", nextNum);
+        newMs.put("title", body.getOrDefault("title", "Milestone " + nextNum));
+        newMs.put("description", body.getOrDefault("description", ""));
+        newMs.put("targetDays", body.getOrDefault("targetDays", 3));
+        newMs.put("concepts", body.getOrDefault("concepts", List.of()));
+        newMs.put("actionItems", body.getOrDefault("actionItems", List.of()));
+        msList.add(newMs);
+
+        plan.setMilestones(msList);
+        plan.setUpdatedAt(Instant.now());
+        plan = studyPlanRepository.save(plan);
+        return ApiResponse.ok(plan);
+    }
+
+    @PutMapping("/api/projects/{projectId}/study-plan/milestones/{number}")
+    public ApiResponse<StudyPlan> updateMilestone(
+            @PathVariable String projectId,
+            @PathVariable int number,
+            @RequestBody Map<String, Object> body,
+            @AuthenticationPrincipal UserPrincipal user) {
+        accessGuard.requireProject(projectId);
+        StudyPlan plan = studyPlanRepository.findByProjectIdAndUserId(projectId, user.getId())
+                .orElseThrow(() -> ApiException.notFound("Study plan not found"));
+
+        List<Map<String, Object>> msList = new ArrayList<>(plan.getMilestones());
+        boolean found = false;
+        for (int i = 0; i < msList.size(); i++) {
+            Map<String, Object> ms = new HashMap<>(msList.get(i));
+            Object rawNum = ms.get("milestoneNumber");
+            int mNum = rawNum instanceof Number ? ((Number) rawNum).intValue() : (i + 1);
+            if (mNum == number) {
+                if (body.containsKey("title")) ms.put("title", body.get("title"));
+                if (body.containsKey("description")) ms.put("description", body.get("description"));
+                if (body.containsKey("targetDays")) ms.put("targetDays", body.get("targetDays"));
+                if (body.containsKey("actionItems")) ms.put("actionItems", body.get("actionItems"));
+                msList.set(i, ms);
+                found = true;
+                break;
+            }
+        }
+        if (!found) throw ApiException.notFound("Milestone not found: " + number);
+
+        plan.setMilestones(msList);
+        plan.setUpdatedAt(Instant.now());
+        return ApiResponse.ok(studyPlanRepository.save(plan));
+    }
+
+    @DeleteMapping("/api/projects/{projectId}/study-plan/milestones/{number}")
+    public ApiResponse<StudyPlan> deleteMilestone(
+            @PathVariable String projectId,
+            @PathVariable int number,
+            @AuthenticationPrincipal UserPrincipal user) {
+        accessGuard.requireProject(projectId);
+        StudyPlan plan = studyPlanRepository.findByProjectIdAndUserId(projectId, user.getId())
+                .orElseThrow(() -> ApiException.notFound("Study plan not found"));
+
+        List<Map<String, Object>> msList = new ArrayList<>();
+        int currentNum = 1;
+        for (int i = 0; i < plan.getMilestones().size(); i++) {
+            Map<String, Object> ms = new HashMap<>(plan.getMilestones().get(i));
+            Object rawNum = ms.get("milestoneNumber");
+            int mNum = rawNum instanceof Number ? ((Number) rawNum).intValue() : (i + 1);
+            if (mNum != number) {
+                ms.put("milestoneNumber", currentNum++);
+                msList.add(ms);
+            }
+        }
+
+        List<Integer> completed = new ArrayList<>(plan.getCompletedMilestones());
+        completed.remove(Integer.valueOf(number));
+
+        plan.setMilestones(msList);
+        plan.setCompletedMilestones(completed);
+        plan.setUpdatedAt(Instant.now());
+        return ApiResponse.ok(studyPlanRepository.save(plan));
+    }
+
+    @DeleteMapping("/api/projects/{projectId}/study-plan")
+    public ApiResponse<Void> deletePlan(
+            @PathVariable String projectId,
+            @AuthenticationPrincipal UserPrincipal user) {
+        accessGuard.requireProject(projectId);
+        studyPlanRepository.findByProjectIdAndUserId(projectId, user.getId())
+                .ifPresent(studyPlanRepository::delete);
+        return ApiResponse.ok(null);
     }
 }

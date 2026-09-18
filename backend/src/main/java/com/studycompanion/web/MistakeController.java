@@ -1,5 +1,6 @@
 package com.studycompanion.web;
 
+import com.studycompanion.common.ApiException;
 import com.studycompanion.common.ApiResponse;
 import com.studycompanion.domain.LearnerMistake;
 import com.studycompanion.domain.LearningContext;
@@ -90,5 +91,26 @@ public class MistakeController {
                 Map.of("mistakeCount", mistakes.size()), "mistakes:" + projectId);
 
         return ApiResponse.ok(ai);
+    }
+
+    @DeleteMapping("/api/mistakes/{id}")
+    public ApiResponse<Void> deleteMistake(
+            @PathVariable String id,
+            @AuthenticationPrincipal UserPrincipal user) {
+        LearnerMistake m = learnerMistakeRepository.findById(id).orElseThrow(() -> ApiException.notFound("Mistake not found"));
+        accessGuard.requireProject(m.getProjectId());
+        if (!m.getUserId().equals(user.getId())) throw ApiException.forbidden("Cannot delete this mistake");
+        learnerMistakeRepository.delete(m);
+        return ApiResponse.ok(null);
+    }
+
+    @DeleteMapping("/api/projects/{projectId}/mistakes")
+    public ApiResponse<Void> clearMistakes(
+            @PathVariable String projectId,
+            @AuthenticationPrincipal UserPrincipal user) {
+        accessGuard.requireProject(projectId);
+        List<LearnerMistake> list = learnerMistakeRepository.findByProjectIdAndUserIdOrderByCreatedAtDesc(projectId, user.getId());
+        learnerMistakeRepository.deleteAll(list);
+        return ApiResponse.ok(null);
     }
 }

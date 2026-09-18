@@ -73,6 +73,59 @@ public class TutorController {
         return ApiResponse.ok(messageRepository.findByConversationIdOrderByCreatedAtAsc(id));
     }
 
+    @PutMapping("/api/tutor/conversations/{id}")
+    public ApiResponse<Conversation> updateConversation(
+            @PathVariable String id,
+            @RequestBody Map<String, String> body,
+            @AuthenticationPrincipal UserPrincipal user) {
+        Conversation c = conversationRepository.findById(id).orElseThrow(() -> ApiException.notFound("Conversation not found"));
+        accessGuard.requireProject(c.getProjectId());
+        if (!c.getUserId().equals(user.getId())) throw ApiException.forbidden("Cannot modify conversation");
+        if (body.containsKey("title") && body.get("title") != null && !body.get("title").isBlank()) {
+            c.setTitle(body.get("title").trim());
+        }
+        return ApiResponse.ok(conversationRepository.save(c));
+    }
+
+    @DeleteMapping("/api/tutor/conversations/{id}")
+    public ApiResponse<Void> deleteConversation(
+            @PathVariable String id,
+            @AuthenticationPrincipal UserPrincipal user) {
+        Conversation c = conversationRepository.findById(id).orElseThrow(() -> ApiException.notFound("Conversation not found"));
+        accessGuard.requireProject(c.getProjectId());
+        if (!c.getUserId().equals(user.getId())) throw ApiException.forbidden("Cannot delete conversation");
+        messageRepository.deleteByConversationId(id);
+        conversationRepository.delete(c);
+        return ApiResponse.ok(null);
+    }
+
+    @DeleteMapping("/api/projects/{projectId}/tutor/conversations")
+    public ApiResponse<Void> clearAllConversations(
+            @PathVariable String projectId,
+            @AuthenticationPrincipal UserPrincipal user) {
+        accessGuard.requireProject(projectId);
+        List<Conversation> convos = conversationRepository.findByProjectIdAndUserIdOrderByCreatedAtDesc(projectId, user.getId());
+        for (Conversation c : convos) {
+            messageRepository.deleteByConversationId(c.getId());
+            conversationRepository.delete(c);
+        }
+        return ApiResponse.ok(null);
+    }
+
+    @DeleteMapping("/api/tutor/messages/{id}")
+    public ApiResponse<Void> deleteMessage(
+            @PathVariable String id,
+            @AuthenticationPrincipal UserPrincipal user) {
+        Message m = messageRepository.findById(id).orElseThrow(() -> ApiException.notFound("Message not found"));
+        Conversation c = conversationRepository.findById(m.getConversationId()).orElse(null);
+        if (c != null) {
+            accessGuard.requireProject(c.getProjectId());
+            if (!c.getUserId().equals(user.getId())) throw ApiException.forbidden("Cannot delete message");
+        }
+        messageRepository.delete(m);
+        return ApiResponse.ok(null);
+    }
+
     @PostMapping("/api/tutor/ask")
     public ApiResponse<Map<String, Object>> ask(@AuthenticationPrincipal UserPrincipal user, @Valid @RequestBody AskReq req) {
         Project project = accessGuard.requireProject(req.getProjectId());

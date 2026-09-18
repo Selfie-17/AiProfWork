@@ -13,7 +13,9 @@ import {
   AlertCircle,
   FileCheck,
   BrainCircuit,
-  ArrowRight
+  ArrowRight,
+  Trash2,
+  Edit2
 } from "lucide-react";
 
 export default function Materials() {
@@ -58,6 +60,31 @@ export default function Materials() {
       toast.push(ex.response?.data?.message || "Upload failed. Check connection.");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleDelete = async (mId, fileName) => {
+    if (!window.confirm(`Are you sure you want to delete "${fileName}"? This will also remove its indexed knowledge chunks.`)) {
+      return;
+    }
+    try {
+      await api.delete(`/api/materials/${mId}`);
+      toast.push(`Deleted "${fileName}"`, "success");
+      load();
+    } catch (err) {
+      toast.push(err.response?.data?.message || "Failed to delete material", "error");
+    }
+  };
+
+  const handleRename = async (mId, currentName) => {
+    const newName = window.prompt("Enter new title for this document:", currentName);
+    if (!newName || newName.trim() === currentName) return;
+    try {
+      await api.put(`/api/materials/${mId}`, { fileName: newName.trim() });
+      toast.push("Renamed successfully", "success");
+      load();
+    } catch (err) {
+      toast.push(err.response?.data?.message || "Failed to rename", "error");
     }
   };
 
@@ -194,13 +221,13 @@ export default function Materials() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
                 <StatusBadge status={m.status} />
                 {m.status === "READY" && (
                   <Link
-                    to={`/projects/${id}/tutor?prompt=${encodeURIComponent(`Summarize key concepts, definitions, and equations from ${m.name}`)}`}
+                    to={`/projects/${id}/tutor?prompt=${encodeURIComponent(`Summarize key concepts, definitions, and equations from ${m.fileName || m.name}`)}`}
                     state={{
-                      prompt: `Summarize key concepts, definitions, and equations from ${m.name}`,
+                      prompt: `Summarize key concepts, definitions, and equations from ${m.fileName || m.name}`,
                       autoSend: true
                     }}
                     className="text-xs font-semibold text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition"
@@ -208,6 +235,22 @@ export default function Materials() {
                     Ask Tutor →
                   </Link>
                 )}
+                <button
+                  type="button"
+                  onClick={() => handleRename(m.id, m.fileName)}
+                  title="Rename document"
+                  className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
+                >
+                  <Edit2 className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDelete(m.id, m.fileName)}
+                  title="Delete document"
+                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
             </div>
           ))

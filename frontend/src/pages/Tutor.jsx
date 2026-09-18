@@ -14,7 +14,9 @@ import {
   AlertTriangle, 
   FileText,
   Search,
-  BookOpen
+  BookOpen,
+  Trash2,
+  Edit2
 } from "lucide-react";
 
 export default function Tutor() {
@@ -312,6 +314,45 @@ export default function Tutor() {
     }
   };
 
+  const handleRenameConvo = async (e, convoId, currentTitle) => {
+    e.stopPropagation();
+    const newTitle = window.prompt("Enter new title for this conversation:", currentTitle);
+    if (!newTitle || newTitle.trim() === currentTitle) return;
+    try {
+      const res = await api.put(`/api/tutor/conversations/${convoId}`, { title: newTitle.trim() });
+      setConversations((prev) => prev.map((c) => (c.id === convoId ? res.data.data : c)));
+    } catch (err) {
+      console.error("Failed to rename conversation", err);
+    }
+  };
+
+  const handleDeleteConvo = async (e, convoId) => {
+    e.stopPropagation();
+    if (!window.confirm("Are you sure you want to delete this conversation?")) return;
+    try {
+      await api.delete(`/api/tutor/conversations/${convoId}`);
+      setConversations((prev) => prev.filter((c) => c.id !== convoId));
+      if (cid === convoId) {
+        setCid(null);
+        setMessages([]);
+      }
+    } catch (err) {
+      console.error("Failed to delete conversation", err);
+    }
+  };
+
+  const handleClearAllConvos = async () => {
+    if (!window.confirm("Are you sure you want to delete ALL study chat sessions for this project?")) return;
+    try {
+      await api.delete(`/api/projects/${id}/tutor/conversations`);
+      setConversations([]);
+      setCid(null);
+      setMessages([]);
+    } catch (err) {
+      console.error("Failed to clear conversations", err);
+    }
+  };
+
   const starters = [
     "Summarize the main topics in this document",
     "Explain the primary formulas and equations covered",
@@ -367,26 +408,58 @@ export default function Tutor() {
               filteredConvos.map((c) => {
                 const isActive = cid === c.id;
                 return (
-                  <button
+                  <div
                     key={c.id}
                     onClick={() => setCid(c.id)}
-                    className={`w-full text-left p-2.5 rounded-xl text-xs transition truncate block ${
+                    className={`group w-full text-left p-2.5 rounded-xl text-xs transition flex items-center justify-between cursor-pointer ${
                       isActive
                         ? "bg-brand-50 text-brand-700 font-semibold border border-brand-200/60 shadow-2xs"
                         : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
                     }`}
                   >
-                    <div className="truncate">{c.title || "Untitled Session"}</div>
-                    {c.updatedAt && (
-                      <div className="text-[10px] text-muted mt-0.5">
-                        {new Date(c.updatedAt).toLocaleDateString()}
-                      </div>
-                    )}
-                  </button>
+                    <div className="truncate flex-1 mr-1.5">
+                      <div className="truncate">{c.title || "Untitled Session"}</div>
+                      {c.updatedAt && (
+                        <div className="text-[10px] text-muted mt-0.5">
+                          {new Date(c.updatedAt).toLocaleDateString()}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        type="button"
+                        onClick={(e) => handleRenameConvo(e, c.id, c.title || "Untitled Session")}
+                        title="Rename"
+                        className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteConvo(e, c.id)}
+                        title="Delete"
+                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-100/60 rounded"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
                 );
               })
             )}
           </div>
+
+          {conversations.length > 1 && (
+            <div className="pt-2 border-t border-slate-100 mt-2">
+              <button
+                type="button"
+                onClick={handleClearAllConvos}
+                className="w-full text-[11px] text-slate-400 hover:text-rose-600 hover:bg-rose-50 py-1.5 rounded-lg transition text-center font-medium"
+              >
+                Clear All Chats
+              </button>
+            </div>
+          )}
         </aside>
 
         {/* Center Panel: Active Chat Thread */}
