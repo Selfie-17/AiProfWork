@@ -40,6 +40,11 @@ public class InternalController {
         if (cost instanceof Number n) log.setCostEstimate(n.doubleValue());
         log.setStatus(str(body.getOrDefault("status", "ok")));
         log.setErrorMsg(str(body.get("errorMsg")));
+        if (body.get("correlationId") != null) {
+            log.setCorrelationId(str(body.get("correlationId")));
+        } else if (body.get("correlation_id") != null) {
+            log.setCorrelationId(str(body.get("correlation_id")));
+        }
         log.setCreatedAt(Instant.now());
         return ApiResponse.ok(aiUsageLogRepository.save(log));
     }

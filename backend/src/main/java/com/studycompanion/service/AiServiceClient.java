@@ -34,12 +34,25 @@ public class AiServiceClient {
         return builder.baseUrl(baseUrl).build();
     }
 
+    private String getOrCreateCorrelationId() {
+        String cid = MDC.get("correlationId");
+        if (cid == null || cid.isBlank()) {
+            cid = MDC.get("traceId");
+        }
+        if (cid == null || cid.isBlank()) {
+            cid = java.util.UUID.randomUUID().toString();
+        }
+        return cid;
+    }
+
     public Map<String, Object> post(String path, Map<String, Object> body) {
         try {
+            String cid = getOrCreateCorrelationId();
             Map<String, Object> result = client().post()
                     .uri(path)
                     .header("X-Internal-Secret", secret)
                     .header("X-Trace-Id", MDC.get("traceId") == null ? "" : MDC.get("traceId"))
+                    .header("X-Correlation-ID", cid)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(body)
                     .retrieve()
@@ -58,10 +71,12 @@ public class AiServiceClient {
 
     public Map<String, Object> get(String path) {
         try {
+            String cid = getOrCreateCorrelationId();
             Map<String, Object> result = client().get()
                     .uri(path)
                     .header("X-Internal-Secret", secret)
                     .header("X-Trace-Id", MDC.get("traceId") == null ? "" : MDC.get("traceId"))
+                    .header("X-Correlation-ID", cid)
                     .retrieve()
                     .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
                     .timeout(Duration.ofSeconds(30))
@@ -79,10 +94,12 @@ public class AiServiceClient {
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> getList(String path) {
         try {
+            String cid = getOrCreateCorrelationId();
             List<Map<String, Object>> result = client().get()
                     .uri(path)
                     .header("X-Internal-Secret", secret)
                     .header("X-Trace-Id", MDC.get("traceId") == null ? "" : MDC.get("traceId"))
+                    .header("X-Correlation-ID", cid)
                     .retrieve()
                     .bodyToMono(new ParameterizedTypeReference<List<Map<String, Object>>>() {})
                     .timeout(Duration.ofSeconds(30))
@@ -99,10 +116,12 @@ public class AiServiceClient {
 
     public Map<String, Object> delete(String path) {
         try {
+            String cid = getOrCreateCorrelationId();
             Map<String, Object> result = client().delete()
                     .uri(path)
                     .header("X-Internal-Secret", secret)
                     .header("X-Trace-Id", MDC.get("traceId") == null ? "" : MDC.get("traceId"))
+                    .header("X-Correlation-ID", cid)
                     .retrieve()
                     .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {})
                     .timeout(Duration.ofSeconds(30))
@@ -118,14 +137,16 @@ public class AiServiceClient {
     }
 
     public reactor.core.publisher.Flux<String> postStream(String path, Map<String, Object> body) {
+        String cid = getOrCreateCorrelationId();
         return client().post()
                 .uri(path)
                 .header("X-Internal-Secret", secret)
                 .header("X-Trace-Id", MDC.get("traceId") == null ? "" : MDC.get("traceId"))
+                .header("X-Correlation-ID", cid)
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(body)
                 .retrieve()
                 .bodyToFlux(String.class);
     }
-}
+}

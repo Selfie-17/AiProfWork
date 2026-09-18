@@ -12,6 +12,8 @@ from app.services.llm_client import TransientProviderError, ClientProviderError
 
 def test_circuit_breaker_transitions():
     cb = CircuitBreaker("TEST_PROVIDER", failure_threshold=3, failure_window=10.0, recovery_timeout=0.1)
+    cb._get_redis = lambda: None
+    cb.reset()
     assert cb.state == CircuitState.CLOSED
     assert cb.can_attempt() is True
 
@@ -95,3 +97,4 @@ def test_provider_chain_circuit_fallback():
     # Now tutor request should bypass Groq and route Gemini first!
     fallback_chain = mgr.get_provider_chain_for_task("tutor")
     assert fallback_chain[0] == "gemini"
+    groq_cb.reset()

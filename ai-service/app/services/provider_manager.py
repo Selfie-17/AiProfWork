@@ -65,12 +65,37 @@ class CircuitState(str, Enum):
     HALF_OPEN = "HALF_OPEN"
 
 
+_RECORD_FAILURE_LUA = """
+local failures_key = KEYS[1]
+local state_key = KEYS[2]
+local opened_at_key = KEYS[3]
+
+local now = tonumber(ARGV[1])
+local cutoff = tonumber(ARGV[2])
+local threshold = tonumber(ARGV[3])
+local ttl = math.max(1, math.ceil(tonumber(ARGV[4])))
+local member = ARGV[5]
+
+redis.call('ZREMRANGEBYSCORE', failures_key, '-inf', cutoff)
+redis.call('ZADD', failures_key, now, member)
+redis.call('EXPIRE', failures_key, ttl)
+
+local count = redis.call('ZCARD', failures_key)
+if count >= threshold then
+    redis.call('SET', state_key, 'OPEN')
+    redis.call('SET', opened_at_key, tostring(now))
+    return {1, count}
+end
+return {0, count}
+"""
+
+
 class CircuitBreaker:
     """
-    Standard 3-state Circuit Breaker:
-    - CLOSED: Normal operation. Records transient errors in a 60-second window.
+    Standard 3-state Circuit Breaker backed by Redis with atomic operations and local-memory fallback:
+    - CLOSED: Normal operation. Records transient errors in a 60-second sliding window.
     - OPEN: Tripped when failure_threshold reached. Rejects requests for recovery_timeout (30s).
-    - HALF_OPEN: Probe state testing if provider has recovered.
+    - HALF_OPEN: Probe state testing if provider has recovered. Exclusive probe lock prevents herd probe.
     """
 
     def __init__(
@@ -84,41 +109,169 @@ class CircuitBreaker:
         self.failure_threshold = failure_threshold
         self.failure_window = failure_window
         self.recovery_timeout = recovery_timeout
-        self.state = CircuitState.CLOSED
+        self._local_state = CircuitState.CLOSED
         self.failure_timestamps: list[float] = []
         self.last_state_change: float = time.time()
 
+    def _get_redis(self):
+        try:
+            from app.services.cache_service import cache_service
+            return cache_service._get_redis()
+        except Exception:
+            return None
+
+    @property
+    def state(self) -> CircuitState:
+        r = self._get_redis()
+        if r is not None:
+            try:
+                st = r.get(f"ai:circuit:{self.provider}:state")
+                if st:
+                    return CircuitState(st)
+            except Exception:
+                pass
+        return self._local_state
+
+    @state.setter
+    def state(self, val: CircuitState):
+        self._local_state = val
+        r = self._get_redis()
+        if r is not None:
+            try:
+                r.set(f"ai:circuit:{self.provider}:state", val.value)
+            except Exception:
+                pass
+
     def can_attempt(self) -> bool:
         now = time.time()
-        if self.state == CircuitState.CLOSED:
+        r = self._get_redis()
+        if r is not None:
+            try:
+                state_key = f"ai:circuit:{self.provider}:state"
+                opened_at_key = f"ai:circuit:{self.provider}:opened_at"
+                probe_lock_key = f"ai:circuit:{self.provider}:probe_lock"
+
+                raw_state = r.get(state_key)
+                current_state = raw_state if raw_state else CircuitState.CLOSED.value
+
+                if current_state == CircuitState.CLOSED.value:
+                    return True
+                elif current_state == CircuitState.OPEN.value:
+                    raw_opened = r.get(opened_at_key)
+                    opened_at = float(raw_opened) if raw_opened else self.last_state_change
+                    if now - opened_at >= self.recovery_timeout:
+                        # Exclusively acquire probe lock to transition into HALF_OPEN (using millisecond precision)
+                        ms = max(10, int(self.recovery_timeout * 1000))
+                        lock_acquired = r.set(probe_lock_key, "probing", nx=True, px=ms)
+                        if lock_acquired:
+                            r.set(state_key, CircuitState.HALF_OPEN.value, px=ms)
+                            log.info("CircuitBreaker[%s]: OPEN -> HALF_OPEN (acquired probe lock)", self.provider)
+                            self._local_state = CircuitState.HALF_OPEN
+                            self.last_state_change = now
+                            return True
+                        return False
+                    return False
+                elif current_state == CircuitState.HALF_OPEN.value:
+                    # In HALF_OPEN, only the worker that holds the probe executes
+                    return False
+                return True
+            except Exception as ex:
+                log.warning("Redis error in CircuitBreaker[%s].can_attempt, using local fallback: %s", self.provider, ex)
+
+        # Local in-memory fallback
+        if self._local_state == CircuitState.CLOSED:
             return True
-        elif self.state == CircuitState.OPEN:
+        elif self._local_state == CircuitState.OPEN:
             if now - self.last_state_change >= self.recovery_timeout:
                 log.info("CircuitBreaker[%s]: OPEN -> HALF_OPEN (probing provider recovery)", self.provider)
-                self.state = CircuitState.HALF_OPEN
+                self._local_state = CircuitState.HALF_OPEN
                 self.last_state_change = now
                 return True
             return False
-        elif self.state == CircuitState.HALF_OPEN:
+        elif self._local_state == CircuitState.HALF_OPEN:
             return True
         return True
 
     def record_success(self):
-        if self.state == CircuitState.HALF_OPEN:
+        r = self._get_redis()
+        if r is not None:
+            try:
+                state_key = f"ai:circuit:{self.provider}:state"
+                failures_key = f"ai:circuit:{self.provider}:failures"
+                opened_at_key = f"ai:circuit:{self.provider}:opened_at"
+                probe_lock_key = f"ai:circuit:{self.provider}:probe_lock"
+
+                current_state = r.get(state_key)
+                if current_state == CircuitState.HALF_OPEN.value:
+                    log.info("CircuitBreaker[%s]: HALF_OPEN probe succeeded -> CLOSED", self.provider)
+                r.set(state_key, CircuitState.CLOSED.value)
+                r.delete(failures_key, opened_at_key, probe_lock_key)
+            except Exception as ex:
+                log.warning("Redis error in CircuitBreaker[%s].record_success: %s", self.provider, ex)
+
+        if self._local_state == CircuitState.HALF_OPEN:
             log.info("CircuitBreaker[%s]: HALF_OPEN probe succeeded -> CLOSED", self.provider)
-            self.state = CircuitState.CLOSED
-            self.last_state_change = time.time()
+        self._local_state = CircuitState.CLOSED
+        self.last_state_change = time.time()
         self.failure_timestamps.clear()
 
     def record_failure(self):
         now = time.time()
-        if self.state == CircuitState.HALF_OPEN:
-            log.warning("CircuitBreaker[%s]: HALF_OPEN probe failed -> returning to OPEN for %.1fs", self.provider, self.recovery_timeout)
-            self.state = CircuitState.OPEN
+        r = self._get_redis()
+        if r is not None:
+            try:
+                state_key = f"ai:circuit:{self.provider}:state"
+                failures_key = f"ai:circuit:{self.provider}:failures"
+                opened_at_key = f"ai:circuit:{self.provider}:opened_at"
+                probe_lock_key = f"ai:circuit:{self.provider}:probe_lock"
+
+                raw_state = r.get(state_key)
+                current_state = raw_state if raw_state else CircuitState.CLOSED.value
+
+                if current_state == CircuitState.HALF_OPEN.value:
+                    log.warning(
+                        "CircuitBreaker[%s]: HALF_OPEN probe failed -> returning to OPEN for %.1fs",
+                        self.provider,
+                        self.recovery_timeout,
+                    )
+                    r.set(state_key, CircuitState.OPEN.value)
+                    r.set(opened_at_key, str(now))
+                    r.delete(probe_lock_key)
+                    self._local_state = CircuitState.OPEN
+                    self.last_state_change = now
+                    return
+
+                cutoff = now - self.failure_window
+                member = f"{now}:{time.perf_counter()}"
+                ttl = int(self.failure_window * 2)
+
+                res = r.eval(_RECORD_FAILURE_LUA, 3, failures_key, state_key, opened_at_key, now, cutoff, self.failure_threshold, ttl, member)
+                tripped, count = res[0], res[1]
+                if tripped == 1:
+                    log.warning(
+                        "CircuitBreaker[%s]: CLOSED -> OPEN (%d transient failures in %.1fs). Cooldown %.1fs",
+                        self.provider,
+                        count,
+                        self.failure_window,
+                        self.recovery_timeout,
+                    )
+                    self._local_state = CircuitState.OPEN
+                    self.last_state_change = now
+                return
+            except Exception as ex:
+                log.warning("Redis error in CircuitBreaker[%s].record_failure, using local fallback: %s", self.provider, ex)
+
+        # Local in-memory fallback
+        if self._local_state == CircuitState.HALF_OPEN:
+            log.warning(
+                "CircuitBreaker[%s]: HALF_OPEN probe failed -> returning to OPEN for %.1fs",
+                self.provider,
+                self.recovery_timeout,
+            )
+            self._local_state = CircuitState.OPEN
             self.last_state_change = now
             return
 
-        # Prune old failures
         cutoff = now - self.failure_window
         self.failure_timestamps = [t for t in self.failure_timestamps if t >= cutoff]
         self.failure_timestamps.append(now)
@@ -131,16 +284,54 @@ class CircuitBreaker:
                 self.failure_window,
                 self.recovery_timeout,
             )
-            self.state = CircuitState.OPEN
+            self._local_state = CircuitState.OPEN
             self.last_state_change = now
 
+    def reset(self):
+        """Explicitly reset circuit breaker state to CLOSED and clear failure tracking."""
+        self._local_state = CircuitState.CLOSED
+        self.failure_timestamps.clear()
+        self.last_state_change = time.time()
+        r = self._get_redis()
+        if r is not None:
+            try:
+                state_key = f"ai:circuit:{self.provider}:state"
+                failures_key = f"ai:circuit:{self.provider}:failures"
+                opened_at_key = f"ai:circuit:{self.provider}:opened_at"
+                probe_lock_key = f"ai:circuit:{self.provider}:probe_lock"
+                r.set(state_key, CircuitState.CLOSED.value)
+                r.delete(failures_key, opened_at_key, probe_lock_key)
+            except Exception as ex:
+                log.warning("Redis error in CircuitBreaker[%s].reset: %s", self.provider, ex)
+
     def get_status(self) -> dict[str, Any]:
+        r = self._get_redis()
+        if r is not None:
+            try:
+                state_key = f"ai:circuit:{self.provider}:state"
+                failures_key = f"ai:circuit:{self.provider}:failures"
+                opened_at_key = f"ai:circuit:{self.provider}:opened_at"
+                raw_st = r.get(state_key)
+                st = raw_st if raw_st else CircuitState.CLOSED.value
+                count = r.zcard(failures_key)
+                opened_at = float(r.get(opened_at_key) or 0.0)
+                return {
+                    "state": st,
+                    "failuresInWindow": count,
+                    "threshold": self.failure_threshold,
+                    "recoveryTimeoutSec": self.recovery_timeout,
+                    "lastStateChange": opened_at if opened_at else self.last_state_change,
+                    "backend": "redis",
+                }
+            except Exception:
+                pass
         return {
-            "state": self.state.value,
+            "state": self._local_state.value,
             "failuresInWindow": len(self.failure_timestamps),
             "threshold": self.failure_threshold,
             "recoveryTimeoutSec": self.recovery_timeout,
             "lastStateChange": self.last_state_change,
+            "backend": "memory",
         }
 
 
@@ -494,6 +685,7 @@ class RuntimeProviderManager:
             update_doc["encrypted_api_key"] = encrypt_api_key(api_key.strip())
             update_doc["last_test_status"] = "CONNECTED"  # reset status on new key
             update_doc["last_error_sanitized"] = None
+            self.get_circuit_breaker(p).reset()
         if selected_model is not None and selected_model.strip():
             update_doc["selectedModel"] = selected_model.strip()
         if active is not None:

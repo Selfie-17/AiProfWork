@@ -118,8 +118,50 @@ class TieredCacheService:
             except Exception:
                 pass
 
-    def get_llm(self, feature: str, prompt: str, schema: bool = False) -> Any | None:
-        key = self.hash_key("llm", feature, str(schema), prompt.strip())
+    def _llm_key(self, feature: str, provider: str, model: str, schema: bool, prompt: str) -> str:
+        return self.hash_key(
+            "llm",
+            feature.lower().strip(),
+            provider.lower().strip(),
+            model.lower().strip(),
+            str(bool(schema)),
+            prompt.strip(),
+        )
+
+    def get_llm(
+        self,
+        feature: str,
+        *args,
+        provider: str = "any",
+        model: str = "any",
+        prompt: str = "",
+        schema: bool = False,
+        **kwargs,
+    ) -> Any | None:
+        """
+        Provider and model-aware LLM cache lookup.
+        Supports:
+          get_llm(feature, provider, model, prompt, schema=False)
+          get_llm(feature, prompt, schema=False)
+          get_llm(feature, provider="groq", model="llama-3.3-70b-versatile", prompt="...", schema=False)
+        """
+        if len(args) >= 3:
+            p = str(args[0])
+            m = str(args[1])
+            pr = str(args[2])
+            s = bool(args[3]) if len(args) > 3 else schema
+        elif len(args) in (1, 2):
+            p = provider
+            m = model
+            pr = str(args[0])
+            s = bool(args[1]) if len(args) == 2 else schema
+        else:
+            p = provider
+            m = model
+            pr = prompt
+            s = schema
+
+        key = self._llm_key(feature, p, m, s, pr)
         cached = self.llm_cache.get(key)
         if cached is not None:
             return cached
@@ -136,13 +178,54 @@ class TieredCacheService:
                 pass
         return None
 
-    def set_llm(self, feature: str, prompt: str, schema: bool, response_dict: dict, ttl_sec: float = 3600.0) -> None:
-        key = self.hash_key("llm", feature, str(schema), prompt.strip())
-        self.llm_cache.set(key, response_dict, ttl_sec=ttl_sec)
+    def set_llm(
+        self,
+        feature: str,
+        *args,
+        provider: str = "any",
+        model: str = "any",
+        prompt: str = "",
+        schema: bool = False,
+        response_dict: dict | None = None,
+        ttl_sec: float = 3600.0,
+        **kwargs,
+    ) -> None:
+        """
+        Provider and model-aware LLM cache storage.
+        Supports:
+          set_llm(feature, provider, model, prompt, schema, response_dict, ttl_sec=3600.0)
+          set_llm(feature, prompt, schema, response_dict, ttl_sec=3600.0)
+          set_llm(feature, provider="groq", model="...", prompt="...", schema=False, response_dict={...})
+        """
+        if len(args) >= 5:
+            p = str(args[0])
+            m = str(args[1])
+            pr = str(args[2])
+            s = bool(args[3])
+            data = args[4]
+            if len(args) > 5 and isinstance(args[5], (int, float)):
+                ttl_sec = float(args[5])
+        elif len(args) >= 3 and isinstance(args[2], dict):
+            p = provider
+            m = model
+            pr = str(args[0])
+            s = bool(args[1])
+            data = args[2]
+            if len(args) > 3 and isinstance(args[3], (int, float)):
+                ttl_sec = float(args[3])
+        else:
+            p = provider
+            m = model
+            pr = prompt
+            s = schema
+            data = response_dict or kwargs.get("response_dict") or {}
+
+        key = self._llm_key(feature, p, m, s, pr)
+        self.llm_cache.set(key, data, ttl_sec=ttl_sec)
         r = self._get_redis()
         if r:
             try:
-                r.setex(f"llm:{key}", int(ttl_sec), json.dumps(response_dict))
+                r.set(f"llm:{key}", json.dumps(data), ex=int(ttl_sec))
             except Exception:
                 pass
 

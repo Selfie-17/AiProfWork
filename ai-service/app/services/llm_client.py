@@ -490,13 +490,17 @@ class LLMClient:
         return HeuristicProvider()
 
     def generate(self, prompt: str, feature: str = "tutor", schema: dict | None = None) -> LLMResponse:
-        # Check cache first for instant sub-millisecond response
-        cached = cache_service.get_llm(feature, prompt, schema=bool(schema))
+        chain = self._active_provider_chain(feature)
+        primary_name = chain[0] if chain else "none"
+        _, primary_model, _ = provider_manager.get_active_credentials(primary_name)
+
+        # Check cache first for instant sub-millisecond response (provider/model aware)
+        cached = cache_service.get_llm(feature, primary_name, primary_model, prompt, schema=bool(schema))
         if cached and isinstance(cached, dict) and "text" in cached:
             return LLMResponse(
                 text=cached["text"],
-                model=cached.get("model", "cached") + " (cached)",
-                provider=cached.get("provider", "cache"),
+                model=cached.get("model", primary_model) + " (cached)",
+                provider=cached.get("provider", primary_name),
                 tokens_in=0,
                 tokens_out=0,
                 raw=cached.get("raw"),
@@ -504,8 +508,6 @@ class LLMClient:
 
         started = time.time()
         last_error = None
-        chain = self._active_provider_chain(feature)
-        primary_name = chain[0] if chain else "none"
 
         for idx, name in enumerate(chain):
             try:
@@ -518,14 +520,22 @@ class LLMClient:
                 provider_manager.record_provider_success(name)
                 log_usage(feature, resp, latency, "ok", None, fallback_used=fallback_used)
 
-                # Store successful generation in cache
+                # Store successful generation in cache with provider & model
                 if resp and resp.text:
-                    cache_service.set_llm(feature, prompt, bool(schema), {
-                        "text": resp.text,
-                        "model": resp.model,
-                        "provider": resp.provider,
-                        "raw": resp.raw,
-                    }, ttl_sec=3600.0)
+                    cache_service.set_llm(
+                        feature,
+                        resp.provider,
+                        resp.model,
+                        prompt,
+                        bool(schema),
+                        {
+                            "text": resp.text,
+                            "model": resp.model,
+                            "provider": resp.provider,
+                            "raw": resp.raw,
+                        },
+                        ttl_sec=3600.0,
+                    )
 
                 return resp
             except ClientProviderError as ex:
@@ -589,8 +599,21 @@ class LLMClient:
         yield "I am currently unable to stream the response. Please check your network or try again."
 
 
-def log_usage(feature: str, resp: LLMResponse, latency_ms: int, status: str, error: str | None, fallback_used: bool = False):
+def log_usage(
+    feature: str,
+    resp: LLMResponse,
+    latency_ms: int,
+    status: str,
+    error: str | None,
+    fallback_used: bool = False,
+    correlation_id: str | None = None,
+):
+    from app.core.context import get_correlation_id
+
+    cid = correlation_id or get_correlation_id() or ""
     payload = {
+        "correlationId": cid,
+        "correlation_id": cid,
         "feature": feature,
         "model": resp.model,
         "provider": resp.provider,
@@ -605,7 +628,10 @@ def log_usage(feature: str, resp: LLMResponse, latency_ms: int, status: str, err
     try:
         httpx.post(
             f"{settings.spring_internal_url}/api/internal/ai-usage",
-            headers={"X-Internal-Secret": settings.internal_service_secret},
+            headers={
+                "X-Internal-Secret": settings.internal_service_secret,
+                "X-Correlation-ID": cid,
+            },
             json=payload,
             timeout=5,
         )

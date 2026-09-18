@@ -17,11 +17,14 @@ public class AiUsageLog {
     private Double costEstimate;
     private String status;
     private String errorMsg;
+    private String correlationId;
     private Instant createdAt;
 
     public AiUsageLog() {}
     public String getId() { return this.id; }
     public void setId(String id) { this.id = id; }
+    public String getCorrelationId() { return this.correlationId; }
+    public void setCorrelationId(String correlationId) { this.correlationId = correlationId; }
     public String getFeature() { return this.feature; }
     public void setFeature(String feature) { this.feature = feature; }
     public String getModel() { return this.model; }
