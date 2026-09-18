@@ -211,19 +211,19 @@ export default function Login({ mode = "login" }) {
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => fillDemo("student@example.com", "password123")}
+                onClick={() => fillDemo("testuser@gmail.com", "Test@123")}
                 className="px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs text-slate-700 font-medium transition text-left"
               >
-                <div className="font-semibold text-slate-900">Student Account</div>
-                <div className="text-[11px] text-slate-500 truncate">student@example.com</div>
+                <div className="font-semibold text-slate-900">Test User</div>
+                <div className="text-[11px] text-slate-500 truncate">testuser@gmail.com</div>
               </button>
               <button
                 type="button"
-                onClick={() => fillDemo("admin@example.com", "adminpassword123")}
+                onClick={() => fillDemo("admin@gmail.com", "Admin@123")}
                 className="px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs text-slate-700 font-medium transition text-left"
               >
                 <div className="font-semibold text-slate-900">Admin Account</div>
-                <div className="text-[11px] text-slate-500 truncate">admin@example.com</div>
+                <div className="text-[11px] text-slate-500 truncate">admin@gmail.com</div>
               </button>
             </div>
           </div>

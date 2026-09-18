@@ -111,6 +111,15 @@ public class AuthController {
                 admin.setCreatedAt(Instant.now());
                 userRepository.save(admin);
             }
+            if (userRepository.findByEmail("testuser@gmail.com").isEmpty()) {
+                User testUser = new User();
+                testUser.setName("Test User");
+                testUser.setEmail("testuser@gmail.com");
+                testUser.setPasswordHash(encoder.encode("Test@123"));
+                testUser.setRole("USER");
+                testUser.setCreatedAt(Instant.now());
+                userRepository.save(testUser);
+            }
         };
     }
 

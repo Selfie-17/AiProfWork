@@ -48,6 +48,10 @@ Deploying separately to cloud (e.g. Render / Railway / VM):
   - Port: 8080
   - Env: SPRING_DATA_MONGODB_URI, SPRING_DATA_REDIS_URL, JWT_SECRET, INTERNAL_SERVICE_SECRET, AI_SERVICE_URL (points to AI service URL)
 
-For admin login use 
-Email : admin@gmail.com
-password : Admin@123
+For admin login use:
+Email: admin@gmail.com
+Password: Admin@123
+
+For test user login use:
+Email: testuser@gmail.com
+Password: Test@123
