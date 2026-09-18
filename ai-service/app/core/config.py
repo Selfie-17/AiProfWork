@@ -9,12 +9,12 @@ class Settings(BaseSettings):
     mongo_uri: str = "mongodb://localhost:27017/studycompanion"
     redis_url: str = "redis://localhost:6381"
     internal_service_secret: str = "change-me-internal-secret"
-    primary_provider: str = "gemini"
-    fallback_provider: str = "groq"
+    primary_provider: str = "groq"
+    fallback_provider: str = "gemini"
     gemini_api_key: str = ""
     groq_api_key: str = ""
     ai_encryption_key: str = ""
-    embedding_dim: int = 768
+    embedding_dim: int = 384
     retrieval_threshold: float = 0.18
     spring_internal_url: str = "http://localhost:8080"
 

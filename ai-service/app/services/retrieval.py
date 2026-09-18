@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from app.core.config import settings
 from app.core.db import db
+from app.services.cache_service import cache_service
 from app.services.llm_client import cosine, embed_text
 
 STOP = {
@@ -61,7 +62,12 @@ def project_filter(project_id: str) -> dict:
 
 
 def fetch_chunks(project_id: str, limit: int = 500) -> list[dict]:
-    return list(db()["material_chunks"].find(project_filter(project_id)).limit(limit))
+    cached = cache_service.get_corpus(str(project_id))
+    if cached is not None:
+        return cached[:limit]
+    chunks = list(db()["material_chunks"].find(project_filter(project_id)).limit(limit))
+    cache_service.set_corpus(str(project_id), chunks, ttl_sec=60.0)
+    return chunks
 
 
 def _score_one(query: str, qvec: list[float], qtoks: list[str], ch: dict) -> dict:

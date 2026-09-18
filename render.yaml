@@ -1,9 +1,55 @@
+# ==============================================================================
+# Lumina Study — Render Multi-Service Blueprint (Separate Services)
+# Deploys Python AI Service and Spring Boot Backend as independent services
+# ==============================================================================
+
 services:
+  # ----------------------------------------------------------------------------
+  # 1. Python AI Service (FastAPI + BAAI bge-small-en-v1.5 + Groq / Gemini)
+  # ----------------------------------------------------------------------------
   - type: web
-    name: lumina-study-backend
+    name: lumina-ai-service
     env: docker
-    dockerfilePath: ./Dockerfile.production
-    dockerContext: .
+    dockerfilePath: ./ai-service/Dockerfile
+    dockerContext: ./ai-service
+    plan: starter
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: PRIMARY_PROVIDER
+        value: groq
+      - key: FALLBACK_PROVIDER
+        value: gemini
+      - key: EMBEDDING_DIM
+        value: 384
+      - key: RETRIEVAL_THRESHOLD
+        value: 0.18
+      - key: MONGO_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: INTERNAL_SERVICE_SECRET
+        generateValue: true
+      - key: SPRING_INTERNAL_URL
+        fromService:
+          type: web
+          name: lumina-backend
+          property: host
+
+  # ----------------------------------------------------------------------------
+  # 2. Spring Boot Backend (Core REST API, Security, Document Management)
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: lumina-backend
+    env: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
     plan: starter
     region: oregon
     healthCheckPath: /actuator/health
@@ -12,23 +58,23 @@ services:
         value: 8080
       - key: SPRING_PROFILES_ACTIVE
         value: prod
-      - key: AI_SERVICE_URL
-        value: http://127.0.0.1:8000
-      - key: SPRING_INTERNAL_URL
-        value: http://127.0.0.1:8080
-      - key: PRIMARY_PROVIDER
-        value: gemini
-      - key: FALLBACK_PROVIDER
-        value: groq
-      - key: MONGO_URI
+      - key: FILE_STORAGE_DIR
+        value: /tmp/uploads
+      - key: SPRING_DATA_MONGODB_URI
         sync: false
-      - key: REDIS_URL
+      - key: SPRING_DATA_REDIS_URL
         sync: false
       - key: CORS_ORIGINS
         sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: INTERNAL_SERVICE_SECRET
-        generateValue: true
-      - key: AI_ENCRYPTION_KEY
-        generateValue: true
+        fromService:
+          type: web
+          name: lumina-ai-service
+          envVarKey: INTERNAL_SERVICE_SECRET
+      - key: AI_SERVICE_URL
+        fromService:
+          type: web
+          name: lumina-ai-service
+          property: host

@@ -63,6 +63,20 @@ public class InternalController {
         return ApiResponse.ok(jobRepository.save(job));
     }
 
+    @GetMapping("/materials/{id}/file")
+    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> materialFile(@PathVariable String id) {
+        Material material = materialRepository.findById(id).orElseThrow();
+        java.nio.file.Path path = java.nio.file.Path.of(material.getStoragePath());
+        if (!java.nio.file.Files.exists(path)) {
+            return org.springframework.http.ResponseEntity.notFound().build();
+        }
+        org.springframework.core.io.Resource resource = new org.springframework.core.io.FileSystemResource(path);
+        return org.springframework.http.ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.APPLICATION_PDF)
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + material.getFileName() + "\"")
+                .body(resource);
+    }
+
     private String str(Object o) {
         return o == null ? null : String.valueOf(o);
     }

@@ -670,7 +670,7 @@ export default function Admin() {
                   </div>
 
                   <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-xs text-slate-400">Gemini 3.6-flash + Groq stack</span>
+                    <span className="text-xs text-slate-400">Groq (Primary) + Gemini (Backup) + BAAI stack</span>
                     <button
                       onClick={() => setActiveTab("ai-usage")}
                       className="text-xs font-bold text-brand-600 hover:text-brand-800 flex items-center space-x-1"
@@ -1331,8 +1331,8 @@ export default function Admin() {
                       </div>
                       <div className="py-2.5 flex items-center justify-between">
                         <div>
-                          <div className="font-bold text-slate-800">Groq (qwen3.8 / gpt-oss / compound)</div>
-                          <div className="text-[11px] text-slate-400">Ultra low-latency fallback inference</div>
+                          <div className="font-bold text-slate-800">Groq (Llama 3.3 / Llama 3.1)</div>
+                          <div className="text-[11px] text-slate-400">Primary ultra-fast generative inference</div>
                         </div>
                         <span className="font-bold text-indigo-600">{groqCalls} calls</span>
                       </div>
@@ -1419,6 +1419,25 @@ export default function Admin() {
                 </div>
               </div>
 
+              {/* Dedicated Embedding Engine Banner */}
+              <div className="bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-brand-500/10 border border-emerald-200/80 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shadow-sm shrink-0">
+                    BGE
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-800">Embedding Engine: BAAI/bge-small-en-v1.5</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-300">Active (Local ONNX)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">Fast local embeddings (384-dim). PDFs index reliably offline with zero quota limits and full Groq compatibility.</p>
+                  </div>
+                </div>
+                <div className="text-[11px] font-bold text-emerald-800 bg-white/90 px-3 py-1.5 rounded-xl border border-emerald-200 shadow-2xs self-start sm:self-auto">
+                  ⚡ Groq Primary · Gemini Backup
+                </div>
+              </div>
+
               {/* Provider Cards Grid */}
               <div className="grid lg:grid-cols-2 gap-6">
                 {/* ---- GEMINI PROVIDER CARD ---- */}
@@ -1440,7 +1459,7 @@ export default function Admin() {
                                 <h4 className="font-bold text-slate-900">Google Gemini</h4>
                                 {statusBadge(gd.status)}
                               </div>
-                              <p className="text-[11px] text-slate-500 mt-0.5">Primary generative & embedding provider (Google AI Studio)</p>
+                              <p className="text-[11px] text-slate-500 mt-0.5">Backup / Fallback inference engine (Google AI Studio)</p>
                             </div>
                           </div>
                           <button
@@ -1508,11 +1527,11 @@ export default function Admin() {
                             </button>
                           </div>
                           <select
-                            value={gd.selectedModel || "gemini-3.6-flash"}
+                            value={gd.selectedModel || "gemini-2.0-flash"}
                             onChange={(e) => handleSaveProvider("GEMINI", { selectedModel: e.target.value })}
                             className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:border-brand-500"
                           >
-                            {(models.length > 0 ? models : ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro"]).map((m) => (
+                            {(models.length > 0 ? models : ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash"]).map((m) => (
                               <option key={m} value={m}>{m}</option>
                             ))}
                           </select>
@@ -1573,9 +1592,10 @@ export default function Admin() {
                             <div>
                               <div className="flex items-center gap-2">
                                 <h4 className="font-bold text-slate-900">Groq Cloud</h4>
+                                <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-md bg-orange-100 text-orange-700 border border-orange-300">PRIMARY</span>
                                 {statusBadge(gd.status)}
                               </div>
-                              <p className="text-[11px] text-slate-500 mt-0.5">Ultra low-latency fallback inference engine</p>
+                              <p className="text-[11px] text-slate-500 mt-0.5">Primary ultra-fast generative engine (Llama 3.3 / 3.1 on Groq LPU)</p>
                             </div>
                           </div>
                           <button
@@ -1643,11 +1663,11 @@ export default function Admin() {
                             </button>
                           </div>
                           <select
-                            value={gd.selectedModel || "qwen/qwen3.8-27b"}
+                            value={gd.selectedModel || "llama-3.3-70b-versatile"}
                             onChange={(e) => handleSaveProvider("GROQ", { selectedModel: e.target.value })}
                             className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:border-brand-500"
                           >
-                            {(models.length > 0 ? models : ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]).map((m) => (
+                            {(models.length > 0 ? models : ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it", "deepseek-r1-distill-llama-70b"]).map((m) => (
                               <option key={m} value={m}>{m}</option>
                             ))}
                           </select>

@@ -1,0 +1,90 @@
+# ==============================================================================
+# Lumina Study — Separate Service Deployment (Docker Compose)
+# Spring Boot and Python FastAPI AI Service running as independent services
+# ==============================================================================
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: lumina-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    container_name: lumina-redis
+    ports:
+      - "6381:6379"
+
+  # ----------------------------------------------------------------------------
+  # Python AI Service (FastAPI + BAAI fastembed ONNX + Groq/Gemini LLM)
+  # Can be deployed completely independently to any container host or cloud VM
+  # ----------------------------------------------------------------------------
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: lumina-ai-service
+    ports:
+      - "8000:8000"
+    environment:
+      MONGO_URI: mongodb://mongo:27017/studycompanion
+      REDIS_URL: redis://redis:6379
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-change-me-internal-secret}
+      PRIMARY_PROVIDER: groq
+      FALLBACK_PROVIDER: gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      AI_ENCRYPTION_KEY: ${AI_ENCRYPTION_KEY:-}
+      EMBEDDING_DIM: "384"
+      RETRIEVAL_THRESHOLD: "0.18"
+      SPRING_INTERNAL_URL: http://backend:8080
+    depends_on:
+      - mongo
+      - redis
+
+  # ----------------------------------------------------------------------------
+  # Spring Boot Backend Service (REST API, Auth, Document Management)
+  # Can be deployed completely independently to any container host or cloud VM
+  # ----------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lumina-backend
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/studycompanion
+      SPRING_DATA_REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-secret-at-least-32-chars}
+      AI_SERVICE_URL: http://ai-service:8000
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-change-me-internal-secret}
+      FILE_STORAGE_DIR: /app/uploads
+      CORS_ORIGINS: http://localhost:5173,http://localhost:4173,http://localhost:3000
+    volumes:
+      - backend_uploads:/app/uploads
+    depends_on:
+      - mongo
+      - redis
+      - ai-service
+
+  # ----------------------------------------------------------------------------
+  # React Frontend (Vite + SPA)
+  # ----------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+    container_name: lumina-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:
+  backend_uploads:

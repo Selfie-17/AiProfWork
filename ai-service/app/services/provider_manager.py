@@ -14,28 +14,20 @@ from app.models.provider_config import ProviderConfigOut, ProviderTestOut
 log = logging.getLogger("ai.provider_manager")
 
 GEMINI_GENERATIVE_MODELS = [
-    "gemini-3.6-flash",
-    "gemini-3.7-flash",
-    "gemini-3.8-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
     "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-pro",
     "gemini-flash-latest",
     "gemini-pro-latest",
-    "gemma-4-26b-a4b-it",
-    "gemma-4-31b-it",
 ]
 
 GROQ_GENERATIVE_MODELS = [
-    "qwen/qwen3.8-27b",
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
-    "groq/compound",
-    "groq/compound-mini",
-    "openai/gpt-oss-safeguard-20b",
-    "allam-2-7b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
+    "deepseek-r1-distill-llama-70b",
 ]
 
 
@@ -81,7 +73,7 @@ class RuntimeProviderManager:
                     "provider": "GEMINI",
                     "apiKey": settings.gemini_api_key,
                     "active": True,
-                    "selectedModel": "gemini-3.6-flash",
+                    "selectedModel": "gemini-2.0-flash",
                     "status": "CONNECTED",
                     "lastTestedAt": None,
                     "lastError": None,
@@ -92,7 +84,7 @@ class RuntimeProviderManager:
                     "provider": "GROQ",
                     "apiKey": settings.groq_api_key,
                     "active": True,
-                    "selectedModel": "qwen/qwen3.8-27b",
+                    "selectedModel": "llama-3.3-70b-versatile",
                     "status": "CONNECTED",
                     "lastTestedAt": None,
                     "lastError": None,
@@ -106,7 +98,7 @@ class RuntimeProviderManager:
     def get_provider_info(self, provider: str) -> dict[str, Any]:
         self._ensure_loaded()
         p = provider.upper()
-        default_model = "gemini-3.6-flash" if p == "GEMINI" else "qwen/qwen3.8-27b"
+        default_model = "llama-3.3-70b-versatile" if p == "GROQ" else "gemini-2.0-flash"
         info = self._cache.get(p)
         if not info:
             return {
@@ -124,7 +116,7 @@ class RuntimeProviderManager:
         """Returns (apiKey, selectedModel, isActive)."""
         info = self.get_provider_info(provider)
         key = info.get("apiKey", "")
-        model = info.get("selectedModel") or ("gemini-3.6-flash" if provider.upper() == "GEMINI" else "qwen/qwen3.8-27b")
+        model = info.get("selectedModel") or ("llama-3.3-70b-versatile" if provider.upper() == "GROQ" else "gemini-2.0-flash")
         active = bool(info.get("active", False) and key)
         return key, model, active
 
@@ -169,7 +161,7 @@ class RuntimeProviderManager:
         p = provider.upper()
         raw_key = info.get("apiKey", "")
         avail = GEMINI_GENERATIVE_MODELS if p == "GEMINI" else GROQ_GENERATIVE_MODELS
-        default_model = "gemini-3.6-flash" if p == "GEMINI" else "qwen/qwen3.8-27b"
+        default_model = "llama-3.3-70b-versatile" if p == "GROQ" else "gemini-2.0-flash"
 
         return ProviderConfigOut(
             provider=p,
@@ -198,7 +190,7 @@ class RuntimeProviderManager:
                 statusCode=400,
             )
 
-        model = model_override or info.get("selectedModel") or ("gemini-3.6-flash" if p == "GEMINI" else "qwen/qwen3.8-27b")
+        model = model_override or info.get("selectedModel") or ("llama-3.3-70b-versatile" if p == "GROQ" else "gemini-2.0-flash")
         start = time.perf_counter()
 
         try:
@@ -234,6 +226,11 @@ class RuntimeProviderManager:
                     self.set_cooldown(f"gemini:{model}", 60.0)
                     self.mark_provider_status(p, "RATE_LIMITED", msg)
                     return ProviderTestOut(provider=p, model=model, success=False, latencyMs=latency, message=msg, statusCode=429)
+                if r.status_code == 503:
+                    msg = "Model overloaded (503). Retrying or cooling down."
+                    self.set_cooldown(f"gemini:{model}", 20.0)
+                    self.mark_provider_status(p, "RATE_LIMITED", msg)
+                    return ProviderTestOut(provider=p, model=model, success=False, latencyMs=latency, message=msg, statusCode=503)
                 if r.status_code == 404:
                     msg = f"Model '{model}' is not available for this API key."
                     return ProviderTestOut(provider=p, model=model, success=False, latencyMs=latency, message=msg, statusCode=404)
@@ -275,6 +272,11 @@ class RuntimeProviderManager:
                     self.set_cooldown(f"groq:{model}", 60.0)
                     self.mark_provider_status(p, "RATE_LIMITED", msg)
                     return ProviderTestOut(provider=p, model=model, success=False, latencyMs=latency, message=msg, statusCode=429)
+                if r.status_code == 503:
+                    msg = "Model overloaded (503). Retrying or cooling down."
+                    self.set_cooldown(f"groq:{model}", 20.0)
+                    self.mark_provider_status(p, "RATE_LIMITED", msg)
+                    return ProviderTestOut(provider=p, model=model, success=False, latencyMs=latency, message=msg, statusCode=503)
                 if r.status_code == 404:
                     msg = f"Model '{model}' is not found."
                     return ProviderTestOut(provider=p, model=model, success=False, latencyMs=latency, message=msg, statusCode=404)

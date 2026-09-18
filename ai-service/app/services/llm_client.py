@@ -30,22 +30,17 @@ class LLMProvider(Protocol):
 
 
 from app.services.provider_manager import provider_manager
+from app.services.cache_service import cache_service
 
 
 class GeminiProvider:
     MODELS = [
-        "gemini-3.6-flash",
-        "gemini-3.7-flash",
-        "gemini-3.8-flash",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
         "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
         "gemini-flash-latest",
         "gemini-pro-latest",
-        "gemma-4-26b-a4b-it",
-        "gemma-4-31b-it",
     ]
 
     def _get_models_to_try(self, active_model: str) -> list[str]:
@@ -81,7 +76,7 @@ class GeminiProvider:
 
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
             try:
-                r = httpx.post(url, headers=headers, json=body, timeout=45)
+                r = httpx.post(url, headers=headers, json=body, timeout=30)
                 if r.status_code == 200:
                     data = r.json()
                     text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -103,7 +98,13 @@ class GeminiProvider:
                     provider_manager.set_cooldown("gemini", min(30.0, retry_after))
                     provider_manager.mark_provider_status("GEMINI", "RATE_LIMITED", "Rate limit reached")
                     log.warning("Gemini model %s rate-limited (429), cooling down %.1fs", model, retry_after)
-                    break  # Break to trigger fallback rather than spamming remaining models
+                    break  # Trigger fallback
+                elif r.status_code == 503:
+                    provider_manager.set_cooldown(f"gemini:{model}", 20.0)
+                    provider_manager.set_cooldown("gemini", 10.0)
+                    provider_manager.mark_provider_status("GEMINI", "RATE_LIMITED", "Model overloaded (503)")
+                    log.warning("Gemini model %s overloaded (503), cooling down %.1fs", model, 20.0)
+                    break  # Trigger fallback immediately without looping through failing models
                 elif r.status_code == 404:
                     provider_manager.disable_model(model)
                     log.warning("Gemini model %s not found (404), disabled for session", model)
@@ -112,8 +113,8 @@ class GeminiProvider:
                     log.warning("Gemini model %s returned 400 bad request: %s", model, r.text[:200])
                     break
                 elif r.status_code >= 500:
-                    time.sleep(0.5)  # transient backoff
-                    r_retry = httpx.post(url, headers=headers, json=body, timeout=45)
+                    time.sleep(0.3)
+                    r_retry = httpx.post(url, headers=headers, json=body, timeout=30)
                     if r_retry.status_code == 200:
                         data = r_retry.json()
                         text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -184,13 +185,11 @@ class GeminiProvider:
 
 class GroqProvider:
     MODELS = [
-        "qwen/qwen3.8-27b",
-        "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b",
-        "groq/compound",
-        "groq/compound-mini",
-        "openai/gpt-oss-safeguard-20b",
-        "allam-2-7b",
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it",
+        "deepseek-r1-distill-llama-70b",
     ]
 
     def _get_models_to_try(self, active_model: str) -> list[str]:
@@ -224,7 +223,7 @@ class GroqProvider:
                 body["response_format"] = {"type": "json_object"}
 
             try:
-                r = httpx.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=45)
+                r = httpx.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=30)
                 if r.status_code == 200:
                     data = r.json()
                     text = data["choices"][0]["message"]["content"]
@@ -247,6 +246,12 @@ class GroqProvider:
                     provider_manager.mark_provider_status("GROQ", "RATE_LIMITED", "Rate limit reached")
                     log.warning("Groq model %s rate-limited (429), cooling down %.1fs", model, retry_after)
                     break
+                elif r.status_code == 503:
+                    provider_manager.set_cooldown(f"groq:{model}", 20.0)
+                    provider_manager.set_cooldown("groq", 10.0)
+                    provider_manager.mark_provider_status("GROQ", "RATE_LIMITED", "Model overloaded (503)")
+                    log.warning("Groq model %s overloaded (503), cooling down %.1fs", model, 20.0)
+                    break
                 elif r.status_code == 404:
                     provider_manager.disable_model(model)
                     log.warning("Groq model %s not found (404), disabled for session", model)
@@ -255,8 +260,8 @@ class GroqProvider:
                     log.warning("Groq model %s returned 400 bad request: %s", model, r.text[:200])
                     break
                 elif r.status_code >= 500:
-                    time.sleep(0.5)
-                    r_retry = httpx.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=45)
+                    time.sleep(0.3)
+                    r_retry = httpx.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=30)
                     if r_retry.status_code == 200:
                         data = r_retry.json()
                         text = data["choices"][0]["message"]["content"]
@@ -454,26 +459,28 @@ class LLMClient:
         _, _, gemini_active = provider_manager.get_active_credentials("GEMINI")
         _, _, groq_active = provider_manager.get_active_credentials("GROQ")
 
-        primary = (settings.primary_provider or "gemini").lower()
-        fallback = (settings.fallback_provider or "groq").lower()
+        primary = (settings.primary_provider or "groq").lower()
+        fallback = (settings.fallback_provider or "gemini").lower()
 
-        if primary == "gemini" and gemini_active:
+        # 1. Primary provider
+        if primary == "groq" and groq_active:
+            chain.append("groq")
+        elif primary == "gemini" and gemini_active:
             chain.append("gemini")
-        elif primary == "groq" and groq_active:
+
+        # 2. Fallback provider
+        if fallback == "gemini" and gemini_active and "gemini" not in chain:
+            chain.append("gemini")
+        elif fallback == "groq" and groq_active and "groq" not in chain:
             chain.append("groq")
 
-        if fallback == "groq" and groq_active and "groq" not in chain:
-            chain.append("groq")
-        elif fallback == "gemini" and gemini_active and "gemini" not in chain:
-            chain.append("gemini")
-
-        # If any remote provider is active but wasn't in chain, add it
-        if gemini_active and "gemini" not in chain:
-            chain.append("gemini")
+        # 3. Add any configured remote provider not yet in chain
         if groq_active and "groq" not in chain:
             chain.append("groq")
+        if gemini_active and "gemini" not in chain:
+            chain.append("gemini")
 
-        # Always append zero-failure heuristic fallback
+        # 4. Always append zero-failure heuristic fallback
         chain.append("heuristic")
         return chain
 
@@ -485,6 +492,18 @@ class LLMClient:
         return HeuristicProvider()
 
     def generate(self, prompt: str, feature: str, schema: dict | None = None) -> LLMResponse:
+        # Check cache first for instant sub-millisecond response
+        cached = cache_service.get_llm(feature, prompt, schema=bool(schema))
+        if cached and isinstance(cached, dict) and "text" in cached:
+            return LLMResponse(
+                text=cached["text"],
+                model=cached.get("model", "cached") + " (cached)",
+                provider=cached.get("provider", "cache"),
+                tokens_in=0,
+                tokens_out=0,
+                raw=cached.get("raw"),
+            )
+
         started = time.time()
         last_error = None
         chain = self._active_provider_chain()
@@ -497,6 +516,16 @@ class LLMClient:
                 latency = int((time.time() - started) * 1000)
                 fallback_used = bool(idx > 0 and name != primary_name)
                 log_usage(feature, resp, latency, "ok", None, fallback_used=fallback_used)
+
+                # Store successful generation in cache
+                if resp and resp.text:
+                    cache_service.set_llm(feature, prompt, bool(schema), {
+                        "text": resp.text,
+                        "model": resp.model,
+                        "provider": resp.provider,
+                        "raw": resp.raw,
+                    }, ttl_sec=3600.0)
+
                 return resp
             except Exception as ex:
                 last_error = ex
@@ -667,28 +696,45 @@ def embed_bge(text: str) -> list[float] | None:
 
 
 def embed_text(text: str, model_preference: str = "auto") -> list[float]:
-    """Semantic embedding supporting Gemini (001, 2) and BAAI/bge-small-en-v1.5 with fallback."""
-    # 1. If explicitly requested Gemini model or auto with Gemini key available
-    if "gemini" in model_preference or (model_preference == "auto" and settings.gemini_api_key):
-        vec = embed_gemini(text, model_name=model_preference if "gemini" in model_preference else None)
+    """Semantic embedding supporting BAAI/bge-small-en-v1.5 (primary) with caching and fallbacks."""
+    clean = text[:3000].strip() or "empty"
+
+    # 0. Check cache
+    cached = cache_service.get_embedding(clean)
+    if cached:
+        return cached
+
+    # 1. Dedicated BAAI/bge-small-en-v1.5 local ONNX embedding (primary)
+    if model_preference in ("auto", "bge", "baai", "local"):
+        vec = embed_bge(clean)
         if vec:
+            cache_service.set_embedding(clean, vec)
             return vec
 
-    # 2. Local high-speed BAAI/bge-small-en-v1.5 embedding
-    vec = embed_bge(text)
+    # 2. Remote Gemini embedding if explicitly requested with 'gemini'
+    if "gemini" in model_preference:
+        vec = embed_gemini(clean, model_name=model_preference)
+        if vec:
+            cache_service.set_embedding(clean, vec)
+            return vec
+
+    # 3. If BAAI wasn't tried yet, try BAAI
+    vec = embed_bge(clean)
     if vec:
+        cache_service.set_embedding(clean, vec)
         return vec
 
-    # 3. If Gemini was not tried yet and key is present, try Gemini
+    # 4. Try Gemini if API key is present
     if settings.gemini_api_key:
-        vec = embed_gemini(text)
+        vec = embed_gemini(clean)
         if vec:
+            cache_service.set_embedding(clean, vec)
             return vec
 
-    # 4. Deterministic n-gram hash vector fallback
-    dim = settings.embedding_dim or 768
+    # 5. Deterministic n-gram hash vector fallback
+    dim = settings.embedding_dim or 384
     vec = [0.0] * dim
-    tokens = re.findall(r"\b[a-z0-9]{2,}\b", text.lower())
+    tokens = re.findall(r"\b[a-z0-9]{2,}\b", clean.lower())
     for tok in tokens:
         h = int(hashlib.sha256(tok.encode()).hexdigest(), 16)
         vec[h % dim] += 1.0
@@ -697,7 +743,55 @@ def embed_text(text: str, model_preference: str = "auto") -> list[float]:
             h_bg = int(hashlib.md5(bg.encode()).hexdigest(), 16)
             vec[(h_bg) % dim] += 0.35
     norm = sum(x * x for x in vec) ** 0.5 or 1.0
-    return [x / norm for x in vec]
+    res = [x / norm for x in vec]
+    cache_service.set_embedding(clean, res)
+    return res
+
+
+def embed_texts(texts: list[str], model_preference: str = "auto") -> list[list[float]]:
+    """Batch embed multiple text chunks in a single ONNX pass with multi-tier caching."""
+    if not texts:
+        return []
+
+    results: list[list[float] | None] = [None] * len(texts)
+    missing_indices: list[int] = []
+    missing_texts: list[str] = []
+
+    for i, t in enumerate(texts):
+        clean = t[:3000].strip() or "empty"
+        cached = cache_service.get_embedding(clean)
+        if cached:
+            results[i] = cached
+        else:
+            missing_indices.append(i)
+            missing_texts.append(clean)
+
+    if missing_texts:
+        model = get_bge_model()
+        if model:
+            try:
+                embeddings = list(model.embed(missing_texts))
+                for idx, emb in zip(missing_indices, embeddings):
+                    vals = list(emb)
+                    norm = sum(x * x for x in vals) ** 0.5 or 1.0
+                    norm_vec = [float(x / norm) for x in vals]
+                    results[idx] = norm_vec
+                    cache_service.set_embedding(texts[idx], norm_vec)
+            except Exception as ex:
+                log.warning("batch bge embed failed, falling back to individual embed: %s", ex)
+                for idx in missing_indices:
+                    results[idx] = embed_text(texts[idx], model_preference)
+        else:
+            for idx in missing_indices:
+                results[idx] = embed_text(texts[idx], model_preference)
+
+    # Fill any remaining None with embed_text fallback
+    final_results = []
+    for i, r in enumerate(results):
+        if r is None:
+            r = embed_text(texts[i], model_preference)
+        final_results.append(r)
+    return final_results
 
 
 def cosine(a: list[float], b: list[float]) -> float:

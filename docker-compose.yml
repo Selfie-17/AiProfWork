@@ -38,12 +38,12 @@ services:
       MONGO_URI: mongodb://mongo:27017/studycompanion
       REDIS_URL: redis://redis:6379
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-change-me-internal-secret}
-      PRIMARY_PROVIDER: ${PRIMARY_PROVIDER:-gemini}
-      FALLBACK_PROVIDER: ${FALLBACK_PROVIDER:-groq}
+      PRIMARY_PROVIDER: ${PRIMARY_PROVIDER:-groq}
+      FALLBACK_PROVIDER: ${FALLBACK_PROVIDER:-gemini}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       AI_ENCRYPTION_KEY: ${AI_ENCRYPTION_KEY:-}
-      EMBEDDING_DIM: "768"
+      EMBEDDING_DIM: "384"
       RETRIEVAL_THRESHOLD: "0.18"
       SPRING_INTERNAL_URL: http://backend:8080
     volumes:

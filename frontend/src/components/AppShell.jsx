@@ -123,7 +123,7 @@ export default function AppShell() {
             <span>· Grounded AI Learning Workspace</span>
           </div>
           <div className="flex items-center gap-4 text-[11px]">
-            <span>Active Models: Gemini 3.6-flash & Groq</span>
+            <span>Active: Groq (Primary) · Gemini (Backup) · BAAI Embeddings</span>
             <span className="w-1 h-1 rounded-full bg-emerald-500 inline-block" />
             <span className="text-emerald-700 font-medium">All Systems Operational</span>
           </div>

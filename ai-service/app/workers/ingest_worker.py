@@ -1,13 +1,16 @@
 import logging
+import os
 import re
+import tempfile
 import time
 from datetime import datetime, timezone
 
 import httpx
 from app.core.config import settings
 from app.core.db import db
+from app.services.cache_service import cache_service
 from app.services.chunking import chunk_pages
-from app.services.llm_client import embed_text, llm
+from app.services.llm_client import embed_text, embed_texts, llm
 from app.services.ocr import extract_pages
 from app.services.prompt_templates import concept_prompt
 from app.services.structured_output import parse_json
@@ -56,7 +59,28 @@ def process_material(material_id: str, project_id: str, file_path: str, job_id: 
         if job_id:
             _notify_spring(f"/api/internal/jobs/{job_id}", {"status": "RUNNING", "retryCount": retries})
 
-        pages = extract_pages(file_path)
+        actual_path = file_path
+        if not os.path.exists(file_path):
+            log.info("File path %s not found locally; fetching from Spring Boot internal endpoint", file_path)
+            temp_dir = os.path.join(tempfile.gettempdir(), "studycompanion_materials")
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_file = os.path.join(temp_dir, f"{material_id}.pdf")
+            try:
+                resp = httpx.get(
+                    f"{settings.spring_internal_url}/api/internal/materials/{material_id}/file",
+                    headers={"X-Internal-Secret": settings.internal_service_secret},
+                    timeout=30,
+                )
+                if resp.status_code == 200:
+                    with open(temp_file, "wb") as f:
+                        f.write(resp.content)
+                    actual_path = temp_file
+                else:
+                    log.warning("Could not download file from Spring: HTTP %s", resp.status_code)
+            except Exception as ex:
+                log.warning("Error downloading file from Spring: %s", ex)
+
+        pages = extract_pages(actual_path)
         chunks = chunk_pages(pages)
 
         # Get original file name for rich citation metadata
@@ -116,18 +140,26 @@ def process_material(material_id: str, project_id: str, file_path: str, job_id: 
         db()["material_chunks"].delete_many(_id_filter("materialId", material_id))
         docs = []
         names = [c.get("name") for c in concepts if c.get("name")]
-        for ch in chunks:
+
+        # Fast batch embedding via BAAI model
+        chunk_texts = [ch["text"] for ch in chunks]
+        embeddings = embed_texts(chunk_texts)
+
+        for ch, emb in zip(chunks, embeddings):
             docs.append({
                 "materialId": str(material_id),
                 "materialName": file_name,
                 "projectId": str(project_id),
                 "pageNumber": ch["pageNumber"],
                 "text": ch["text"],
-                "embedding": embed_text(ch["text"]),
+                "embedding": emb,
                 "concepts": names,
             })
         if docs:
             db()["material_chunks"].insert_many(docs)
+
+        # Invalidate project corpus cache so subsequent retrieval immediately sees new materials
+        cache_service.invalidate_project(str(project_id))
 
         _set_material(material_id, status="READY", pageCount=len(pages), error=None)
         if job_id:

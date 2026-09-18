@@ -118,8 +118,8 @@ def get_available_models(provider: str, _=Depends(require_internal)):
                     models = []
                     for item in data.get("data", []):
                         m_id = item.get("id", "")
-                        # Filter to general-purpose text LLMs, exclude whisper, guard
-                        if any(m_id.startswith(pref) for pref in ("qwen/", "openai/gpt-oss", "groq/", "allam-")) and "guard" not in m_id:
+                        # Filter to general-purpose text LLMs, exclude whisper, guard, vision
+                        if any(m_id.startswith(pref) for pref in ("llama-", "mixtral-", "gemma", "deepseek-", "qwen-")) and "guard" not in m_id:
                             models.append(m_id)
                     if models:
                         return {"provider": p, "models": models}

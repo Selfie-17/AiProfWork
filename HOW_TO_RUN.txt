@@ -33,6 +33,21 @@ docker compose up --build
 Then open http://localhost:5173
 (API 8080, AI 8000; Redis is on host 6381 if 6379 is already in use)
 
+--- Separate Service Docker Deployment ---
+Run each service as independent containers:
+docker compose -f docker-compose.separate.yml up --build
+
+Deploying separately to cloud (e.g. Render / Railway / VM):
+- Python AI Service:
+  - Context: ./ai-service
+  - Port: 8000
+  - Env: MONGO_URI, REDIS_URL, INTERNAL_SERVICE_SECRET, SPRING_INTERNAL_URL (points to Spring Boot URL)
+  - Primary Provider: groq, Fallback: gemini, Embeddings: BAAI/bge-small-en-v1.5 (local ONNX)
+- Spring Boot Service:
+  - Context: ./backend
+  - Port: 8080
+  - Env: SPRING_DATA_MONGODB_URI, SPRING_DATA_REDIS_URL, JWT_SECRET, INTERNAL_SERVICE_SECRET, AI_SERVICE_URL (points to AI service URL)
+
 For admin login use 
 Email : admin@gmail.com
 password : Admin@123
