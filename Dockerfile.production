@@ -1,0 +1,55 @@
+# ==============================================================================
+# Lumina Study — Unified Production Docker Image (Spring Boot + FastAPI)
+# Optimized for Render Web Service (Port 8080 exposed, FastAPI internal on 8000)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Stage 1: Build Spring Boot Application JAR
+# ------------------------------------------------------------------------------
+FROM maven:3.9-eclipse-temurin-17 AS backend-builder
+WORKDIR /app
+COPY backend/pom.xml .
+COPY backend/src ./src
+RUN mvn -DskipTests clean package
+
+# ------------------------------------------------------------------------------
+# Stage 2: Unified Production Runtime (Python 3.11 + OpenJDK 17 + Tesseract OCR)
+# ------------------------------------------------------------------------------
+FROM python:3.11-slim-bookworm
+WORKDIR /app
+
+# Install system dependencies: OpenJDK 17 Headless JRE, Tesseract OCR, bash, and curl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-17-jre-headless \
+    tesseract-ocr \
+    curl \
+    bash \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies for FastAPI AI Service
+COPY ai-service/requirements.txt /app/ai-service/requirements.txt
+RUN pip install --no-cache-dir -r /app/ai-service/requirements.txt
+
+# Copy FastAPI codebase
+COPY ai-service/app /app/ai-service/app
+
+# Copy built Spring Boot JAR
+COPY --from=backend-builder /app/target/study-companion-api-0.1.0.jar /app/app.jar
+
+# Copy production supervisor script
+COPY start-production.sh /app/start-production.sh
+RUN chmod +x /app/start-production.sh
+
+# Prepare durable upload directory
+RUN mkdir -p /app/uploads
+
+# Default Production Environment Flags
+ENV SPRING_PROFILES_ACTIVE=prod \
+    AI_SERVICE_URL=http://127.0.0.1:8000 \
+    SPRING_INTERNAL_URL=http://127.0.0.1:8080 \
+    FILE_STORAGE_DIR=/app/uploads
+
+# Render routes to port 8080; port 8000 is loopback only
+EXPOSE 8080
+
+ENTRYPOINT ["/bin/bash", "/app/start-production.sh"]

@@ -1,0 +1,41 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: study-companion-api
+  data:
+    mongodb:
+      uri: ${SPRING_DATA_MONGODB_URI:${MONGO_URI:mongodb://localhost:27017/studycompanion}}
+    redis:
+      url: ${SPRING_DATA_REDIS_URL:${REDIS_URL:redis://localhost:6381}}
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 25MB
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:change-me-to-a-long-random-secret-at-least-32-chars}
+    access-minutes: ${JWT_ACCESS_MINUTES:30}
+    refresh-days: ${JWT_REFRESH_DAYS:7}
+  ai-service:
+    url: ${AI_SERVICE_URL:http://localhost:8000}
+    secret: ${INTERNAL_SERVICE_SECRET:change-me-internal-secret}
+  storage:
+    dir: ${FILE_STORAGE_DIR:./uploads}
+  cors:
+    origins: ${CORS_ORIGINS:http://localhost:5173}
+
+management:
+  endpoint:
+    health:
+      show-details: always
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  pattern:
+    console: '{"ts":"%d{iso8601}","level":"%p","traceId":"%X{traceId}","logger":"%c","msg":"%m"}%n'

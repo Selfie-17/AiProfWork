@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: lumina-study-backend
+    env: docker
+    dockerfilePath: ./Dockerfile.production
+    dockerContext: .
+    plan: starter
+    region: oregon
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: AI_SERVICE_URL
+        value: http://127.0.0.1:8000
+      - key: SPRING_INTERNAL_URL
+        value: http://127.0.0.1:8080
+      - key: PRIMARY_PROVIDER
+        value: gemini
+      - key: FALLBACK_PROVIDER
+        value: groq
+      - key: MONGO_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: INTERNAL_SERVICE_SECRET
+        generateValue: true
+      - key: AI_ENCRYPTION_KEY
+        generateValue: true

@@ -1,0 +1,34 @@
+HOW TO RUN — Lumina Study
+
+Need: JDK 17, Maven, Python 3.11+, Node 20+, Docker (for Mongo/Redis).
+
+1) Env
+   Copy .env.example to .env
+   Optional: set GEMINI_API_KEY and/or GROQ_API_KEY (works without them).
+
+2) Mongo + Redis
+   docker compose up mongo redis
+
+3) Backend  (port 8080)
+   cd backend
+   mvn spring-boot:run
+
+4) AI service  (port 8000)
+   cd ai-service
+   python -m venv .venv
+   .venv\Scripts\activate
+   pip install -r requirements.txt
+   uvicorn app.main:app --reload --port 8000
+
+5) Frontend  (port 5173)
+   cd frontend
+   npm install
+   npm run dev
+
+Open http://localhost:5173
+Register a user, or admin: admin@studycompanion.local / Admin123!
+
+--- All-in-one Docker ---
+docker compose up --build
+Then open http://localhost:5173
+(API 8080, AI 8000; Redis is on host 6381 if 6379 is already in use)

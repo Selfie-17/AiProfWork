@@ -1,0 +1,44 @@
+# Version control
+.git/
+.github/
+
+# Environment and secrets
+.env
+.env.*
+.env.local
+*.pem
+*.key
+secrets/
+*.dump
+*.credentials
+
+# Java / Maven build artifacts
+backend/target/
+*.class
+*.jar
+*.war
+
+# Node / Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Python virtualenvs and caches
+ai-service/.venv/
+ai-service/__pycache__/
+ai-service/**/__pycache__/
+ai-service/*.pyc
+ai-service/.pytest_cache/
+**/__pycache__/
+
+# Local runtime uploads & databases
+uploads/
+backend/uploads/
+data/
+
+# IDE & OS files
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
