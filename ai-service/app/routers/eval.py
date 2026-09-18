@@ -40,12 +40,23 @@ def run_eval(_=Depends(require_internal)):
     except Exception:
         schema_ok = False
     passed = all(r["passed"] for r in results) and schema_ok
+
+    # Validate provider abstraction for evaluation feature (routes to Gemini with Groq fallback)
+    eval_provider_used = "none"
+    try:
+        from app.services.llm_client import llm
+        eval_resp = llm.generate("State the goal of regression testing in 1 short sentence.", feature="eval", schema=False)
+        eval_provider_used = eval_resp.provider
+    except Exception as ex:
+        eval_provider_used = f"fallback: {ex}"
+
     return {
         "ok": True,
         "passed": passed,
         "threshold": settings.retrieval_threshold,
         "results": results,
         "schemaValidation": schema_ok,
+        "evalProvider": eval_provider_used,
     }
 
 

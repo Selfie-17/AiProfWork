@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 import httpx
@@ -30,6 +31,118 @@ GROQ_GENERATIVE_MODELS = [
     "deepseek-r1-distill-llama-70b",
 ]
 
+TASK_ROUTING: dict[str, str] = {
+    "tutor": "groq",
+    "quiz": "groq",
+    "flashcards": "groq",
+    "study_plan": "groq",
+    "misconception": "groq",
+    "eval": "gemini",
+}
+
+
+def normalize_task(feature: str) -> str:
+    """Normalize runtime feature strings to canonical task names."""
+    f = (feature or "").lower().strip()
+    if "tutor" in f:
+        return "tutor"
+    if "quiz" in f:
+        return "quiz"
+    if "flashcard" in f:
+        return "flashcards"
+    if "study_plan" in f or "plan" in f:
+        return "study_plan"
+    if "mistake" in f or "misconception" in f:
+        return "misconception"
+    if "eval" in f:
+        return "eval"
+    return "tutor"
+
+
+class CircuitState(str, Enum):
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    HALF_OPEN = "HALF_OPEN"
+
+
+class CircuitBreaker:
+    """
+    Standard 3-state Circuit Breaker:
+    - CLOSED: Normal operation. Records transient errors in a 60-second window.
+    - OPEN: Tripped when failure_threshold reached. Rejects requests for recovery_timeout (30s).
+    - HALF_OPEN: Probe state testing if provider has recovered.
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        failure_threshold: int = 5,
+        failure_window: float = 60.0,
+        recovery_timeout: float = 30.0,
+    ):
+        self.provider = provider.upper()
+        self.failure_threshold = failure_threshold
+        self.failure_window = failure_window
+        self.recovery_timeout = recovery_timeout
+        self.state = CircuitState.CLOSED
+        self.failure_timestamps: list[float] = []
+        self.last_state_change: float = time.time()
+
+    def can_attempt(self) -> bool:
+        now = time.time()
+        if self.state == CircuitState.CLOSED:
+            return True
+        elif self.state == CircuitState.OPEN:
+            if now - self.last_state_change >= self.recovery_timeout:
+                log.info("CircuitBreaker[%s]: OPEN -> HALF_OPEN (probing provider recovery)", self.provider)
+                self.state = CircuitState.HALF_OPEN
+                self.last_state_change = now
+                return True
+            return False
+        elif self.state == CircuitState.HALF_OPEN:
+            return True
+        return True
+
+    def record_success(self):
+        if self.state == CircuitState.HALF_OPEN:
+            log.info("CircuitBreaker[%s]: HALF_OPEN probe succeeded -> CLOSED", self.provider)
+            self.state = CircuitState.CLOSED
+            self.last_state_change = time.time()
+        self.failure_timestamps.clear()
+
+    def record_failure(self):
+        now = time.time()
+        if self.state == CircuitState.HALF_OPEN:
+            log.warning("CircuitBreaker[%s]: HALF_OPEN probe failed -> returning to OPEN for %.1fs", self.provider, self.recovery_timeout)
+            self.state = CircuitState.OPEN
+            self.last_state_change = now
+            return
+
+        # Prune old failures
+        cutoff = now - self.failure_window
+        self.failure_timestamps = [t for t in self.failure_timestamps if t >= cutoff]
+        self.failure_timestamps.append(now)
+
+        if len(self.failure_timestamps) >= self.failure_threshold:
+            log.warning(
+                "CircuitBreaker[%s]: CLOSED -> OPEN (%d transient failures in %.1fs). Cooldown %.1fs",
+                self.provider,
+                len(self.failure_timestamps),
+                self.failure_window,
+                self.recovery_timeout,
+            )
+            self.state = CircuitState.OPEN
+            self.last_state_change = now
+
+    def get_status(self) -> dict[str, Any]:
+        return {
+            "state": self.state.value,
+            "failuresInWindow": len(self.failure_timestamps),
+            "threshold": self.failure_threshold,
+            "recoveryTimeoutSec": self.recovery_timeout,
+            "lastStateChange": self.last_state_change,
+        }
+
 
 class RuntimeProviderManager:
     def __init__(self):
@@ -38,6 +151,10 @@ class RuntimeProviderManager:
         self._cache_ttl: float = 60.0  # 60 seconds auto-refresh TTL
         self._cooldowns: dict[str, float] = {}  # key: "provider" or "provider:model" -> timestamp
         self._disabled_models: set[str] = set()
+        self._circuit_breakers: dict[str, CircuitBreaker] = {
+            "GROQ": CircuitBreaker("GROQ", failure_threshold=5, failure_window=60.0, recovery_timeout=30.0),
+            "GEMINI": CircuitBreaker("GEMINI", failure_threshold=5, failure_window=60.0, recovery_timeout=30.0),
+        }
 
     def invalidate_cache(self):
         """Immediately purge cached runtime configurations."""
@@ -120,6 +237,76 @@ class RuntimeProviderManager:
         active = bool(info.get("active", False) and key)
         return key, model, active
 
+    def get_circuit_breaker(self, provider: str) -> CircuitBreaker:
+        p = provider.upper()
+        if p not in self._circuit_breakers:
+            self._circuit_breakers[p] = CircuitBreaker(p, failure_threshold=5, failure_window=60.0, recovery_timeout=30.0)
+        return self._circuit_breakers[p]
+
+    def is_provider_available(self, provider: str) -> bool:
+        """Check if provider has active credentials, is not in cooldown, and circuit breaker allows attempts."""
+        p = provider.upper()
+        _, _, is_active = self.get_active_credentials(p)
+        if not is_active:
+            return False
+        if self.is_in_cooldown(provider.lower()):
+            return False
+        return self.get_circuit_breaker(p).can_attempt()
+
+    def get_provider_chain_for_task(self, feature_or_task: str = "tutor") -> list[str]:
+        """
+        Determine resilient, task-tailored provider execution chain.
+        Routes interactive tasks to Groq, evaluation to Gemini, with automatic circuit breaker fallback.
+        """
+        task = normalize_task(feature_or_task)
+        preferred = TASK_ROUTING.get(task, (settings.primary_provider or "groq")).lower()
+        fallback = "gemini" if preferred == "groq" else "groq"
+
+        preferred_avail = self.is_provider_available(preferred)
+        fallback_avail = self.is_provider_available(fallback)
+
+        _, _, pref_configured = self.get_active_credentials(preferred)
+        _, _, fall_configured = self.get_active_credentials(fallback)
+
+        chain: list[str] = []
+
+        if preferred_avail:
+            chain.append(preferred)
+            if fall_configured:
+                chain.append(fallback)
+        elif fallback_avail:
+            # Circuit breaker tripped or cooldown on preferred: route directly to fallback
+            chain.append(fallback)
+            if pref_configured:
+                chain.append(preferred)
+        else:
+            # Both degraded/cooldown: preserve configured order
+            if pref_configured:
+                chain.append(preferred)
+            if fall_configured and fallback not in chain:
+                chain.append(fallback)
+
+        # Always append zero-failure fallback
+        chain.append("heuristic")
+        return chain
+
+    def record_provider_success(self, provider: str):
+        """Record successful call to reset circuit breaker and restore state."""
+        p = provider.upper()
+        self.get_circuit_breaker(p).record_success()
+
+    def record_provider_failure(self, provider: str, is_transient: bool = True):
+        """
+        Record failure. Only transient failures (429, 500, 502, 503, timeout) trip the circuit breaker.
+        Non-transient errors (400, 401, 403, 404, schema) do not penalize provider circuit breaker.
+        """
+        p = provider.upper()
+        if is_transient:
+            self.get_circuit_breaker(p).record_failure()
+            cb_status = self.get_circuit_breaker(p).state
+            if cb_status == CircuitState.OPEN:
+                self.mark_provider_status(p, "RATE_LIMITED", f"Circuit Breaker OPEN: 5+ transient failures in 60s")
+
     def is_in_cooldown(self, target: str) -> bool:
         cd = self._cooldowns.get(target, 0.0)
         return time.time() < cd
@@ -173,6 +360,7 @@ class RuntimeProviderManager:
             lastTestedAt=str(info.get("lastTestedAt")) if info.get("lastTestedAt") else None,
             lastError=info.get("lastError"),
             availableModels=avail,
+            circuitBreaker=self.get_circuit_breaker(p).get_status(),
         )
 
     def test_connection(self, provider: str, key_override: str | None = None, model_override: str | None = None) -> ProviderTestOut:

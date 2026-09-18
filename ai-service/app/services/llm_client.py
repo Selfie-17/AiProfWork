@@ -25,6 +25,16 @@ class LLMResponse:
     raw: Any = None
 
 
+class TransientProviderError(RuntimeError):
+    """Transient failure (429, 500, 502, 503, timeout, network) that triggers fallback and circuit breaker."""
+    pass
+
+
+class ClientProviderError(RuntimeError):
+    """Client/auth/schema failure (400, 401, 403, 404) that fails immediately without fallback."""
+    pass
+
+
 class LLMProvider(Protocol):
     def generate(self, prompt: str, schema: dict | None = None) -> LLMResponse: ...
 
@@ -90,42 +100,39 @@ class GeminiProvider:
                         raw=data,
                     )
                 elif r.status_code in (401, 403):
-                    provider_manager.mark_provider_status("GEMINI", "ERROR", "API key rejected or unauthorized")
-                    raise RuntimeError(f"Gemini API key unauthorized (HTTP {r.status_code})")
+                    provider_manager.mark_provider_status("GEMINI", "ERROR", f"API key rejected or unauthorized (HTTP {r.status_code})")
+                    raise ClientProviderError(f"Gemini API key unauthorized (HTTP {r.status_code})")
+                elif r.status_code == 400:
+                    log.warning("Gemini model %s returned 400 bad request: %s", model, r.text[:200])
+                    raise ClientProviderError(f"Gemini bad request (HTTP 400): {r.text[:200]}")
+                elif r.status_code == 404:
+                    provider_manager.disable_model(model)
+                    log.warning("Gemini model %s not found (404), disabled for session", model)
+                    continue
                 elif r.status_code == 429:
                     retry_after = float(r.headers.get("retry-after", 60))
                     provider_manager.set_cooldown(f"gemini:{model}", retry_after)
                     provider_manager.set_cooldown("gemini", min(30.0, retry_after))
                     provider_manager.mark_provider_status("GEMINI", "RATE_LIMITED", "Rate limit reached")
-                    log.warning("Gemini model %s rate-limited (429), cooling down %.1fs", model, retry_after)
-                    break  # Trigger fallback
-                elif r.status_code == 503:
+                    raise TransientProviderError(f"Gemini model {model} rate-limited (HTTP 429)")
+                elif r.status_code in (500, 502, 503):
                     provider_manager.set_cooldown(f"gemini:{model}", 20.0)
                     provider_manager.set_cooldown("gemini", 10.0)
-                    provider_manager.mark_provider_status("GEMINI", "RATE_LIMITED", "Model overloaded (503)")
-                    log.warning("Gemini model %s overloaded (503), cooling down %.1fs", model, 20.0)
-                    break  # Trigger fallback immediately without looping through failing models
-                elif r.status_code == 404:
-                    provider_manager.disable_model(model)
-                    log.warning("Gemini model %s not found (404), disabled for session", model)
-                    continue
-                elif r.status_code == 400:
-                    log.warning("Gemini model %s returned 400 bad request: %s", model, r.text[:200])
-                    break
-                elif r.status_code >= 500:
-                    time.sleep(0.3)
-                    r_retry = httpx.post(url, headers=headers, json=body, timeout=30)
-                    if r_retry.status_code == 200:
-                        data = r_retry.json()
-                        text = data["candidates"][0]["content"]["parts"][0]["text"]
-                        usage = data.get("usageMetadata", {})
-                        return LLMResponse(text=text, model=model, provider="gemini", tokens_in=int(usage.get("promptTokenCount") or 0), tokens_out=int(usage.get("candidatesTokenCount") or 0), raw=data)
-                    last_error = f"HTTP {r_retry.status_code}"
+                    provider_manager.mark_provider_status("GEMINI", "RATE_LIMITED", f"Model server error ({r.status_code})")
+                    raise TransientProviderError(f"Gemini model {model} server error (HTTP {r.status_code})")
+                elif r.status_code >= 400:
+                    raise TransientProviderError(f"Gemini HTTP {r.status_code} error: {r.text[:200]}")
+            except (ClientProviderError, TransientProviderError):
+                raise
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.ConnectError) as ex:
+                last_error = ex
+                log.warning("Gemini model %s network/timeout error: %s", model, ex)
+                raise TransientProviderError(f"Gemini network/timeout error: {ex}") from ex
             except Exception as ex:
                 last_error = ex
                 log.warning("Gemini model %s call failed: %s", model, ex)
                 continue
-        raise RuntimeError(f"All Gemini models failed: {last_error}")
+        raise TransientProviderError(f"All Gemini models failed: {last_error}")
 
     def generate_stream(self, prompt: str):
         key, active_model, is_active = provider_manager.get_active_credentials("GEMINI")
@@ -151,12 +158,17 @@ class GeminiProvider:
             try:
                 with httpx.stream("POST", url, headers=headers, params={"alt": "sse"}, json=body, timeout=45) as r:
                     if r.status_code in (401, 403):
-                        provider_manager.mark_provider_status("GEMINI", "ERROR", "API key rejected or unauthorized")
-                        break
+                        provider_manager.mark_provider_status("GEMINI", "ERROR", f"API key rejected or unauthorized (HTTP {r.status_code})")
+                        raise ClientProviderError(f"Gemini API key unauthorized (HTTP {r.status_code})")
+                    if r.status_code == 400:
+                        raise ClientProviderError(f"Gemini stream bad request (HTTP 400)")
                     if r.status_code == 429:
                         provider_manager.set_cooldown(f"gemini:{model}", 60.0)
                         provider_manager.set_cooldown("gemini", 30.0)
-                        break
+                        raise TransientProviderError(f"Gemini stream rate-limited (HTTP 429)")
+                    if r.status_code in (500, 502, 503):
+                        provider_manager.set_cooldown(f"gemini:{model}", 20.0)
+                        raise TransientProviderError(f"Gemini stream server error (HTTP {r.status_code})")
                     if r.status_code == 404:
                         provider_manager.disable_model(model)
                         continue
@@ -176,11 +188,16 @@ class GeminiProvider:
                             except Exception:
                                 continue
                     return
+            except (ClientProviderError, TransientProviderError):
+                raise
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.ConnectError) as ex:
+                last_error = ex
+                raise TransientProviderError(f"Gemini stream timeout/network error: {ex}") from ex
             except Exception as ex:
                 last_error = ex
                 log.warning("Gemini stream model %s failed: %s", model, ex)
                 continue
-        raise RuntimeError(f"All Gemini stream models failed: {last_error}")
+        raise TransientProviderError(f"All Gemini stream models failed: {last_error}")
 
 
 class GroqProvider:
@@ -237,42 +254,39 @@ class GroqProvider:
                         raw=data,
                     )
                 elif r.status_code in (401, 403):
-                    provider_manager.mark_provider_status("GROQ", "ERROR", "API key rejected or unauthorized")
-                    raise RuntimeError(f"Groq API key unauthorized (HTTP {r.status_code})")
+                    provider_manager.mark_provider_status("GROQ", "ERROR", f"API key rejected or unauthorized (HTTP {r.status_code})")
+                    raise ClientProviderError(f"Groq API key unauthorized (HTTP {r.status_code})")
+                elif r.status_code == 400:
+                    log.warning("Groq model %s returned 400 bad request: %s", model, r.text[:200])
+                    raise ClientProviderError(f"Groq bad request (HTTP 400): {r.text[:200]}")
+                elif r.status_code == 404:
+                    provider_manager.disable_model(model)
+                    log.warning("Groq model %s not found (404), disabled for session", model)
+                    continue
                 elif r.status_code == 429:
                     retry_after = float(r.headers.get("retry-after", 60))
                     provider_manager.set_cooldown(f"groq:{model}", retry_after)
                     provider_manager.set_cooldown("groq", min(30.0, retry_after))
                     provider_manager.mark_provider_status("GROQ", "RATE_LIMITED", "Rate limit reached")
-                    log.warning("Groq model %s rate-limited (429), cooling down %.1fs", model, retry_after)
-                    break
-                elif r.status_code == 503:
+                    raise TransientProviderError(f"Groq model {model} rate-limited (HTTP 429)")
+                elif r.status_code in (500, 502, 503):
                     provider_manager.set_cooldown(f"groq:{model}", 20.0)
                     provider_manager.set_cooldown("groq", 10.0)
-                    provider_manager.mark_provider_status("GROQ", "RATE_LIMITED", "Model overloaded (503)")
-                    log.warning("Groq model %s overloaded (503), cooling down %.1fs", model, 20.0)
-                    break
-                elif r.status_code == 404:
-                    provider_manager.disable_model(model)
-                    log.warning("Groq model %s not found (404), disabled for session", model)
-                    continue
-                elif r.status_code == 400:
-                    log.warning("Groq model %s returned 400 bad request: %s", model, r.text[:200])
-                    break
-                elif r.status_code >= 500:
-                    time.sleep(0.3)
-                    r_retry = httpx.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=30)
-                    if r_retry.status_code == 200:
-                        data = r_retry.json()
-                        text = data["choices"][0]["message"]["content"]
-                        usage = data.get("usage", {})
-                        return LLMResponse(text=text, model=model, provider="groq", tokens_in=int(usage.get("prompt_tokens") or 0), tokens_out=int(usage.get("completion_tokens") or 0), raw=data)
-                    last_error = f"HTTP {r_retry.status_code}"
+                    provider_manager.mark_provider_status("GROQ", "RATE_LIMITED", f"Model overloaded/server error ({r.status_code})")
+                    raise TransientProviderError(f"Groq model {model} server error (HTTP {r.status_code})")
+                elif r.status_code >= 400:
+                    raise TransientProviderError(f"Groq HTTP {r.status_code} error: {r.text[:200]}")
+            except (ClientProviderError, TransientProviderError):
+                raise
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.ConnectError) as ex:
+                last_error = ex
+                log.warning("Groq model %s network/timeout error: %s", model, ex)
+                raise TransientProviderError(f"Groq network/timeout error: {ex}") from ex
             except Exception as ex:
                 last_error = ex
                 log.warning("Groq model %s failed: %s", model, ex)
                 continue
-        raise RuntimeError(f"All Groq models failed: {last_error}")
+        raise TransientProviderError(f"All Groq models failed: {last_error}")
 
     def generate_stream(self, prompt: str):
         key, active_model, is_active = provider_manager.get_active_credentials("GROQ")
@@ -280,7 +294,7 @@ class GroqProvider:
             raise RuntimeError("Groq is not configured or is inactive")
 
         if provider_manager.is_in_cooldown("groq"):
-            raise RuntimeError("Groq is currently in rate-limit cooldown")
+            raise TransientProviderError("Groq is currently in rate-limit cooldown")
 
         models_to_try = self._get_models_to_try(active_model)
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
@@ -298,12 +312,17 @@ class GroqProvider:
             try:
                 with httpx.stream("POST", "https://api.groq.com/openai/v1/chat/completions", headers=headers, json=body, timeout=45) as r:
                     if r.status_code in (401, 403):
-                        provider_manager.mark_provider_status("GROQ", "ERROR", "API key rejected or unauthorized")
-                        break
+                        provider_manager.mark_provider_status("GROQ", "ERROR", f"API key rejected or unauthorized (HTTP {r.status_code})")
+                        raise ClientProviderError(f"Groq API key unauthorized (HTTP {r.status_code})")
+                    if r.status_code == 400:
+                        raise ClientProviderError(f"Groq stream bad request (HTTP 400)")
                     if r.status_code == 429:
                         provider_manager.set_cooldown(f"groq:{model}", 60.0)
                         provider_manager.set_cooldown("groq", 30.0)
-                        break
+                        raise TransientProviderError(f"Groq stream rate-limited (HTTP 429)")
+                    if r.status_code in (500, 502, 503):
+                        provider_manager.set_cooldown(f"groq:{model}", 20.0)
+                        raise TransientProviderError(f"Groq stream server error (HTTP {r.status_code})")
                     if r.status_code == 404:
                         provider_manager.disable_model(model)
                         continue
@@ -323,11 +342,16 @@ class GroqProvider:
                             except Exception:
                                 continue
                     return
+            except (ClientProviderError, TransientProviderError):
+                raise
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.ConnectError) as ex:
+                last_error = ex
+                raise TransientProviderError(f"Groq stream timeout/network error: {ex}") from ex
             except Exception as ex:
                 last_error = ex
                 log.warning("Groq stream model %s failed: %s", model, ex)
                 continue
-        raise RuntimeError(f"All Groq stream models failed: {last_error}")
+        raise TransientProviderError(f"All Groq stream models failed: {last_error}")
 
 
 class HeuristicProvider:
@@ -454,35 +478,9 @@ def heuristic_complete(prompt: str) -> str:
 
 
 class LLMClient:
-    def _active_provider_chain(self) -> list[str]:
-        chain = []
-        _, _, gemini_active = provider_manager.get_active_credentials("GEMINI")
-        _, _, groq_active = provider_manager.get_active_credentials("GROQ")
-
-        primary = (settings.primary_provider or "groq").lower()
-        fallback = (settings.fallback_provider or "gemini").lower()
-
-        # 1. Primary provider
-        if primary == "groq" and groq_active:
-            chain.append("groq")
-        elif primary == "gemini" and gemini_active:
-            chain.append("gemini")
-
-        # 2. Fallback provider
-        if fallback == "gemini" and gemini_active and "gemini" not in chain:
-            chain.append("gemini")
-        elif fallback == "groq" and groq_active and "groq" not in chain:
-            chain.append("groq")
-
-        # 3. Add any configured remote provider not yet in chain
-        if groq_active and "groq" not in chain:
-            chain.append("groq")
-        if gemini_active and "gemini" not in chain:
-            chain.append("gemini")
-
-        # 4. Always append zero-failure heuristic fallback
-        chain.append("heuristic")
-        return chain
+    def _active_provider_chain(self, feature: str = "tutor") -> list[str]:
+        """Delegate task-specific provider selection and circuit breaker fallback to ProviderManager."""
+        return provider_manager.get_provider_chain_for_task(feature)
 
     def _provider(self, name: str) -> LLMProvider:
         if name == "gemini":
@@ -491,7 +489,7 @@ class LLMClient:
             return GroqProvider()
         return HeuristicProvider()
 
-    def generate(self, prompt: str, feature: str, schema: dict | None = None) -> LLMResponse:
+    def generate(self, prompt: str, feature: str = "tutor", schema: dict | None = None) -> LLMResponse:
         # Check cache first for instant sub-millisecond response
         cached = cache_service.get_llm(feature, prompt, schema=bool(schema))
         if cached and isinstance(cached, dict) and "text" in cached:
@@ -506,7 +504,7 @@ class LLMClient:
 
         started = time.time()
         last_error = None
-        chain = self._active_provider_chain()
+        chain = self._active_provider_chain(feature)
         primary_name = chain[0] if chain else "none"
 
         for idx, name in enumerate(chain):
@@ -515,6 +513,9 @@ class LLMClient:
                 resp = provider.generate(prompt, schema)
                 latency = int((time.time() - started) * 1000)
                 fallback_used = bool(idx > 0 and name != primary_name)
+
+                # Record successful attempt in circuit breaker
+                provider_manager.record_provider_success(name)
                 log_usage(feature, resp, latency, "ok", None, fallback_used=fallback_used)
 
                 # Store successful generation in cache
@@ -527,17 +528,27 @@ class LLMClient:
                     }, ttl_sec=3600.0)
 
                 return resp
-            except Exception as ex:
+            except ClientProviderError as ex:
+                # 400, 401, 403, 404: Client/auth error. Do NOT count toward breaker, do NOT fallback.
+                provider_manager.record_provider_failure(name, is_transient=False)
+                latency = int((time.time() - started) * 1000)
+                log.error("Provider %s client error on %s (no fallback): %s", name, feature, ex)
+                log_usage(feature, LLMResponse(text="", model=name, provider=name), latency, "error", str(ex))
+                raise
+            except (TransientProviderError, Exception) as ex:
+                # 429, 500, 502, 503, timeout: Transient failure. Counts toward breaker and triggers fallback.
+                provider_manager.record_provider_failure(name, is_transient=True)
                 last_error = ex
-                log.warning("provider %s failed: %s", name, ex)
+                log.warning("Provider %s transient failure on %s (falling back): %s", name, feature, ex)
                 continue
+
         latency = int((time.time() - started) * 1000)
         log_usage(feature, LLMResponse(text="", model="none", provider="none"), latency, "error", str(last_error))
-        raise RuntimeError(f"All LLM providers failed: {last_error}")
+        raise RuntimeError(f"All LLM providers failed for task '{feature}': {last_error}")
 
     def generate_stream(self, prompt: str, feature: str = "tutor"):
         started = time.time()
-        chain = self._active_provider_chain()
+        chain = self._active_provider_chain(feature)
         primary_name = chain[0] if chain else "none"
 
         for idx, name in enumerate(chain):
@@ -557,11 +568,22 @@ class LLMClient:
                     tokens_out=len(full.split()),
                 )
                 fallback_used = bool(idx > 0 and name != primary_name)
+
+                # Record successful attempt in circuit breaker
+                provider_manager.record_provider_success(name)
                 log_usage(feature, resp, latency, "ok", None, fallback_used=fallback_used)
                 return
-            except Exception as ex:
-                log.warning("stream provider %s failed: %s", name, ex)
+            except ClientProviderError as ex:
+                provider_manager.record_provider_failure(name, is_transient=False)
+                latency = int((time.time() - started) * 1000)
+                log.error("Stream provider %s client error (no fallback): %s", name, ex)
+                log_usage(feature, LLMResponse(text="", model=name, provider=name), latency, "error", str(ex))
+                raise
+            except (TransientProviderError, Exception) as ex:
+                provider_manager.record_provider_failure(name, is_transient=True)
+                log.warning("Stream provider %s transient failure (falling back): %s", name, ex)
                 continue
+
         latency = int((time.time() - started) * 1000)
         log_usage(feature, LLMResponse(text="", model="none", provider="none"), latency, "error", "All streaming failed")
         yield "I am currently unable to stream the response. Please check your network or try again."

@@ -20,6 +20,7 @@ class ProviderConfigOut(BaseModel):
     lastTestedAt: str | None = None
     lastError: str | None = None
     availableModels: list[str] = []
+    circuitBreaker: dict[str, Any] | None = None
 
 
 class ProviderTestIn(BaseModel):
