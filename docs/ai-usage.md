@@ -12,35 +12,40 @@ Build-time AI did **not** generate the uploaded study PDFs. Those are user conte
 
 | Feature | Trigger | Provider path | Structured output |
 |---|---|---|---|
-| Concept extract | Material ingest | Gemini → Groq → heuristic | `{concepts:[{name, description}]}` |
-| Tutor answer | `/api/tutor/ask` | Same, **skipped** if retrieval is below threshold | `{answer, citations[], confidence, evidenceStatus}` |
-| Quiz question | Quiz start/next | Same | `{type, question, options, correctAnswer, concept}` |
-| Open-ended grade | Quiz answer when type is OPEN | Same | rubric JSON: score, understood[], missing[], feedback |
-| Recommendation | Quiz complete | Same | `{text, reason}` |
-| Offline eval | `POST /eval/run` (internal) | No live LLM; threshold + schema checks | pass/fail cases |
+| **Concept extraction** | Material ingest | Gemini → Groq → heuristic | `{concepts: [{name, description, difficulty, category}]}` |
+| **Concept Graph & Topology** | Concept Map tab / rescan | Gemini → Groq → heuristic | `{nodes: [...], edges: [...], categories: [...]}` |
+| **Tutor Answer (REST & SSE Stream)** | Tutor chat message | Gemini → Groq → heuristic (skipped if retrieval < threshold) | Real-time SSE token stream + citation badges `{source, page, quote}` |
+| **Quiz Generation** | Quiz start / next question | Gemini → Groq → heuristic | `{type: "MCQ"|"OPEN", question, options, correctAnswer, concept}` |
+| **Open-ended Grading** | Quiz submission (OPEN) | Gemini → Groq → heuristic | Rubric JSON: `{score, understood[], missing[], feedback}` |
+| **Flashcard Deck Generation** | Flashcards generate | Gemini → Groq → heuristic | `[{front, back, conceptName, difficulty}]` |
+| **Mistakes Root-Cause Analysis** | Mistakes Notebook analyze | Gemini → Groq → heuristic | `{misconceptions: [...], studyAdvice: [...]}` |
+| **Study Plan Generation** | Study Plan generate | Gemini → Groq → heuristic | `{milestones: [...], weeklyHours, targetScore}` |
+| **Recommendations** | Quiz completion | Gemini → Groq → heuristic | `{text, reason}` |
+| **Offline Eval** | `POST /eval/run` (internal) | No live LLM; threshold & schema regression checks | Pass / fail test suites |
 
-MCQ grading is local (string match) and does not call an LLM.
+MCQ grading is local (deterministic string match) and does not consume LLM tokens.
 
-## Provider abstraction
+## Provider abstraction & Runtime Management
 
-`LLMClient` tries `PRIMARY_PROVIDER` (default `gemini`, model `gemini-2.0-flash`), then `FALLBACK_PROVIDER` (default `groq`, model `llama-3.1-8b-instant`), then a local `HeuristicProvider` so the loop still runs without API keys.
+- `LLMClient` tries `PRIMARY_PROVIDER` (default `gemini`, model `gemini-2.0-flash`), then `FALLBACK_PROVIDER` (default `groq`, model `llama-3.1-8b-instant`), and finally a local `HeuristicProvider` so every capability runs seamlessly even without external API keys.
+- **Runtime Provider Configuration:** Administrators can dynamically update provider settings, test API keys, and swap primary/fallback models at runtime directly through the Admin UI without restarting server instances. Configurations are persisted in the `provider_configs` MongoDB collection.
+- **Deterministic Embeddings:** Chunks and queries utilize deterministic hash vectors (SHA-256 bag-of-tokens with dim `EMBEDDING_DIM=768`) to guarantee fast, zero-cost, fully offline retrieval.
 
-Embeddings are **deterministic hash vectors** (SHA-256 bag-of-tokens, dim `EMBEDDING_DIM=768`). That keeps retrieval working offline; it is not a production embedding model.
+## Grounding and prompt-injection defense
 
-## Grounding and prompt-injection
-
-- User questions, notes, and conversation snippets are wrapped in labeled `<data>` blocks.
-- System text tells the model to treat those blocks as untrusted reference, never as instructions.
-- Tutor refuses to answer when cosine(top hit) &lt; `RETRIEVAL_THRESHOLD`.
-- Citations are taken from the model JSON when valid, otherwise filled from retrieved chunks (page + quote).
+- User prompts, conversation snippets, and document contents are strictly wrapped in designated `<data>` containers.
+- System instructions enforce that data containers are treated exclusively as untrusted reference materials.
+- Tutor refuses to formulate speculative answers when top cosine match score < `RETRIEVAL_THRESHOLD`.
+- Citations are extracted and verified against indexed project materials with explicit source file names and page indices.
 
 ## Observability
 
-Each `llm.generate(..., feature=...)` posts usage to Spring `/api/internal/ai-usage` (or writes Mongo directly). Admin UI charts usage by feature and shows estimated USD cost (rough per-token rates, not invoices).
+Every `llm.generate(..., feature=...)` and streaming completion logs execution metrics (`{feature, model, provider, tokens, latencyMs, costEstimate, status}`) to `ai_usage_logs`. The Admin UI visualizes breakdowns by feature, token consumption, and estimated dollar costs.
 
 ## What AI is not used for
 
-- Authentication, authorization, or mastery math (those are deterministic Java).
-- PDF binary storage.
-- Activity idempotency.
-- Frontend rendering.
+- User authentication, JWT issuance, or password hashing (BCrypt).
+- Core authorization or project data isolation (`AccessGuard`).
+- Mathematical mastery calculations and SM-2 spaced repetition decay algorithms (deterministic Java logic).
+- PDF binary storage and file system management.
+- Activity idempotency deduplication.

@@ -10,10 +10,11 @@ Prototype constraints for a 3–4 day candidate build. None of these are hidden;
 
 ## LLM and tutor
 
-- No streaming (SSE). The chat waits for the full answer.
-- If the model returns invalid JSON, the tutor falls back to raw text plus retrieval-derived citations.
-- Heuristic mode (no API keys) produces generic quiz/tutor payloads so the UI still works.
-- Conversation context sent to the model is the last few messages, not a full summarizer.
+- The tutor streams responses via Server-Sent Events (SSE). If a network disconnect interrupts the stream, the UI supports a fallback to standard synchronous request/response.
+- If an LLM returns unparseable JSON during structured generation, fallback parsers salvage raw markdown answers paired with retrieval-derived citations.
+- Heuristic mode (when no API keys are provided) produces template-based responses so offline workflows remain testable.
+- Conversation context sent to the model is windowed to the last 8 messages and current learning context, rather than using an unbounded recursive summarizer.
+
 
 ## Ingest
 

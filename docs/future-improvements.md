@@ -1,39 +1,35 @@
 # Future improvements
 
-Ordered by impact on the PRD “context never lost” loop, not by novelty.
+This document tracks upcoming architectural and product enhancements, as well as recently delivered capabilities.
 
-## Retrieval
+## Recently Delivered
 
-- Replace hash embeddings with a real embedding API or Atlas Vector Search index on `material_chunks.embedding`.
-- Hybrid search (BM25 + vector) and a cross-encoder rerank on the top 20.
-- Per-material citation deep-link: open the PDF at the cited page in the UI.
+- [x] **Real-time SSE Token Streaming:** Low-latency token streaming from FastAPI through Spring Boot (`text/event-stream`) to the React chat pane with live markdown and formula rendering.
+- [x] **Interactive Concept Graph & 0ms Caching:** Knowledge graph extraction with fixed topology cached in MongoDB (`concept_graphs`) and explicit user-driven re-scanning.
+- [x] **Smart Flashcards & Spaced Repetition:** Flashcard deck generation from concepts with SuperMemo-2 (SM-2) review interval scheduling.
+- [x] **Mistakes Notebook & Root-Cause Analysis:** Automated tracking of quiz errors and AI-powered diagnostic reviews.
+- [x] **Personalized Study Planner:** Automated milestone schedules based on target exam deadlines and weak concepts.
+- [x] **Runtime LLM Provider Management:** Live configuration, testing, and model switching (Gemini, Groq, Ollama) directly from the Admin UI.
+- [x] **Production Deployment Architecture:** Unified single-container Docker packaging for Render coupled with Vercel frontend.
 
-## Tutor
+## Next-Horizon Improvements
 
-- SSE or token streaming from FastAPI through Spring Boot to the chat pane.
-- Conversation summarizer into `learning_context` so long chats stay cheap.
-- Explicit “compare two uploaded sources” tool that still refuses when evidence is thin.
+### Retrieval & Knowledge Indexing
+- Replace bag-of-tokens hash embeddings with managed dense vector search (e.g. MongoDB Atlas Vector Search or Gemini text embeddings).
+- Implement hybrid search (BM25 keyword matching + dense vector similarity) with cross-encoder re-ranking.
+- Deep-link citation viewer: clicking a citation badge opens the PDF viewer directly scrolled and highlighted at the referenced page and bounding box.
 
-## Jobs and storage
+### Tutor & Learning Experience
+- Multi-document comparative analysis tool (e.g. cross-referencing conflicting textbook notes or lecture slides).
+- Audio transcription and audio voice-tutor mode for auditory learners.
+- Conversation summarization agent that condenses long chat threads into permanent learner memory.
 
-- Dedicated worker process (RQ/Celery or Spring `@Async` queue) with job lease/heartbeat so ingest survives restarts.
-- S3-compatible object storage and short-lived download URLs.
-- Dead-letter UI on Admin for failed jobs with one-click retry.
+### Infrastructure & Distributed Jobs
+- Migrate local PDF storage to S3-compatible cloud object storage (AWS S3 or Cloudflare R2) with presigned URLs.
+- Decouple background ingestion from in-process tasks to dedicated distributed workers (e.g., Redis Celery/RQ or Spring Batch queue).
+- Dead-letter queue inspection and one-click job retry from the Admin dashboard.
 
-## Quiz / mastery
+### Collaboration & Community
+- Multi-user Spaces with shared lecture materials, team concept graphs, and collaborative quiz sessions.
+- Export assessment summaries and study plan milestones to PDF or Notion/Google Docs.
 
-- Item-response style difficulty instead of three buckets.
-- Spaced-repetition / flashcards generated from `ATTENTION` concepts (nice-to-have in the plan).
-- Calibrate open-ended grading against a small human-labeled set.
-
-## Evaluation and ops
-
-- Nightly eval: golden questions over a fixture PDF, store results in Mongo, chart pass rate on Admin.
-- Trace IDs propagated into Python logs (currently Spring-side MDC).
-- GitHub Actions already intended for unit tests; add deploy-on-main once hosts exist.
-
-## Product
-
-- Mobile layout pass and empty-state illustrations.
-- Multi-member Spaces with roles (today a space is owned by one user).
-- Export assessment PDF for a project.
